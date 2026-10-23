@@ -220,7 +220,7 @@ async function loadAdmin() {
   const o = ov.overview;
   $("admin-overview").innerHTML = `<h3>Overview</h3><p>Members: <strong>${esc(o.memberCount)}</strong> · Open requests: <strong>${esc(o.openRequests)}</strong> · Active matches: <strong>${esc(o.activeMatches)}</strong> · Admins: <strong>${esc(o.adminCount)} (owner only)</strong></p><p class="muted small">Admin is locked to ${esc(OWNER_ADMIN_EMAIL)}. No other account can be promoted.</p>`;
   $("admin-members").innerHTML = mem.members.map((m) => `<p><strong>${esc(m.display_name)}</strong> — ${esc(m.email)} <span class="badge">${esc(m.roles.join(", "))}</span></p>`).join("") || "<p class='muted'>No members yet.</p>";
-  $("admin-invites").innerHTML = inv.invites.map((i) => `<p><strong>${esc(i.code)}</strong> · used ${esc(i.use_count)}/${esc(i.max_uses)} · ${i.is_active ? "active" : "used up"}</p>`).join("") || "<p class='muted'>No invite codes yet.</p>";
+  $("admin-invites").innerHTML = inv.invites.map((i) => `<p><strong>${esc(i.code)}</strong> · ${i.max_uses == null ? `Reusable · ${esc(i.use_count)} signups` : `used ${esc(i.use_count)}/${esc(i.max_uses)}`} · ${i.is_active ? "active" : "used up"}</p>`).join("") || "<p class='muted'>No invite codes yet.</p>";
   $("admin-content").innerHTML = "";
   con.content.forEach((c) => {
     const wrap = document.createElement("form"); wrap.className = "form";
@@ -342,6 +342,7 @@ function wire() {
   $("account-marketing").onchange = async (e) => { try { const d = await call("/api/me", { method: "PATCH", body: { marketingOptIn: e.target.checked } }); state.user = d.user; toast(e.target.checked ? "Your community-news preference is saved." : "You've unsubscribed from community news emails."); } catch (err) { e.target.checked = !!state.user.marketing_email_opt_in; toast(friendly(err)); } };
   $("btn-export").onclick = async () => { try { const d = await call("/api/account/export", { method: "POST", body: {} }); const out = $("export-output"); out.textContent = JSON.stringify(d.export, null, 2); out.classList.remove("hidden"); toast("Your data export is below — copy and save it."); } catch (err) { toast(friendly(err)); } };
   $("btn-delete-data").onclick = async () => { if (!confirm("Delete your account and all your data? This can't be undone.")) return; try { await call("/api/account", { method: "DELETE" }); localStorage.removeItem(CONFIG.TOKEN_KEY); state.user = null; setSignedInUI(); toast("Your account and data were deleted."); } catch (err) { toast(friendly(err)); } };
+  $("btn-reuse-invites").onclick = async () => { await call("/api/admin/invites/reuse", { method: "POST", body: {} }); toast("Existing invite codes are reusable now."); await loadAdmin(); };
   $("invite-form").onsubmit = async (e) => { e.preventDefault(); try { await call("/api/admin/invites", { method: "POST", body: {} }); toast("Invite code created."); loadAdmin(); } catch (err) { toast(friendly(err)); } };
 }
 
