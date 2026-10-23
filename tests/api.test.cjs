@@ -6,7 +6,7 @@ const crypto = require('node:crypto');
 let source = fs.readFileSync('netlify/functions/api.mjs','utf8').replace(/^import .*;$/gm, '').replace('export { Db };', '').replace('export default async function handlerV2','async function handlerV2').replace('export async function handler','async function handler');
 source += '\nthis.subject = { handle, Db };';
 const reminderModule = import('../server/lib/reminders.mjs');
-const context = { crypto, process, console, URL, Response, emailConfigured: () => false, sendAccountabilityEmail: async () => { throw Error('not configured'); }, createReminders: async (...args) => (await reminderModule).createReminders(...args) };
+const context = { crypto, process, console, URL, Response, googleReady: () => false, emailConfigured: () => false, sendAccountabilityEmail: async () => { throw Error('not configured'); }, createReminders: async (...args) => (await reminderModule).createReminders(...args) };
 vm.runInNewContext(source, context);
 const { handle, Db } = context.subject;
 function fixture() {
@@ -134,6 +134,45 @@ test('test reminder sends only to the signed-in account email',async()=>{
 test('unsupported integrations are clearly distinguished from available features',async()=>{
  const f=fixture();await f.seed('user_roles',{id:'admin',user_id:'owner',role:'admin'});
  const r=await f.call('GET','/api/admin/integrations');
- assert.equal(r.obj.integrations.find(x=>x.provider==='Google Calendar sync').status,'Not included');
+ assert.equal(r.obj.integrations.find(x=>x.provider==='Private Google Calendar sync').status,'Owner Google setup required');
  assert.equal(r.obj.integrations.find(x=>x.provider==='Shared app calendar').status,'Available');
+});
+
+test('new request notifications are per-member and visible only to their recipient',async()=>{
+ const f=fixture();await f.call('POST','/api/requests',{title:'Test new request',what_needed:'Help',partner_duties:'Check in',scheduled_for:'2099-01-01',duration_minutes:30});
+ const notes=await f.db.all('notifications');assert.equal(notes.length,1);assert.equal(notes[0].user_id,'partner');assert.equal(notes[0].kind,'request_posted');
+ const own=await f.call('GET','/api/notifications');assert.equal(own.obj.notifications.length,0);
+});
+test('Google connection status never exposes another member tokens',async()=>{
+ const f=fixture();await f.seed('google_connections',{id:'partner',user_id:'partner',tokens:'secret',calendar_id:'private'});
+ const result=await f.call('GET','/api/google/status');assert.equal(result.obj.connected,false);assert.equal(JSON.stringify(result).includes('secret'),false);
+});
+test('Google events contain only a member own commitments without attendees',async()=>{
+ const {memberCalendarEvent}=await import('../server/lib/google-calendar.mjs');
+ const r={id:'r',requester_id:'owner',title:'Test',what_needed:'Help',partner_duties:'Check in',scheduled_for:'2099-01-01',duration_minutes:30,status:'open'};
+ assert.equal(memberCalendarEvent(r,'stranger',[]),null);
+ const event=memberCalendarEvent(r,'owner',[]);assert.equal(event.visibility,'private');assert.equal('attendees' in event,false);
+ assert.equal(memberCalendarEvent({...r,status:'cancelled'},'owner',[]),null);
+});
+test('Google authorization uses single-purpose scope and stores no plaintext state verifier',async()=>{
+ const {beginGoogle}=await import('../server/lib/google-calendar.mjs');const f=fixture();
+ const oldId=process.env.GOOGLE_CLIENT_ID,oldSecret=process.env.GOOGLE_CLIENT_SECRET;
+ process.env.GOOGLE_CLIENT_ID='test-client';process.env.GOOGLE_CLIENT_SECRET='test-secret';
+ try {const url=new URL(await beginGoogle(f.db,'owner'));assert.equal(url.searchParams.get('scope'),'https://www.googleapis.com/auth/calendar.app.created');assert.equal(url.searchParams.get('code_challenge_method'),'S256');const state=await f.db.all('google_oauth_states');assert.notEqual(state[0].id,url.searchParams.get('state'));assert.match(state[0].verifier,/^[^.]+\.[^.]+\.[^.]+$/);}
+ finally {if(oldId===undefined)delete process.env.GOOGLE_CLIENT_ID;else process.env.GOOGLE_CLIENT_ID=oldId;if(oldSecret===undefined)delete process.env.GOOGLE_CLIENT_SECRET;else process.env.GOOGLE_CLIENT_SECRET=oldSecret;}
+});
+
+test('Google callback encrypts tokens, rejects replay and syncs only the member calendar',async()=>{
+ const {beginGoogle,finishGoogle,syncMemberCalendar}=await import('../server/lib/google-calendar.mjs');const f=fixture();
+ const oldFetch=global.fetch,oldId=process.env.GOOGLE_CLIENT_ID,oldSecret=process.env.GOOGLE_CLIENT_SECRET;const calls=[];
+ process.env.GOOGLE_CLIENT_ID='test-client';process.env.GOOGLE_CLIENT_SECRET='test-secret';
+ global.fetch=async(url,options)=>{calls.push({url,options});if(url.includes('oauth2.googleapis.com/token'))return new Response(JSON.stringify({access_token:'access-secret',refresh_token:'refresh-secret',expires_in:3600,scope:'https://www.googleapis.com/auth/calendar.app.created'}),{status:200});if(url.endsWith('/calendars'))return new Response(JSON.stringify({id:'my-private-calendar'}),{status:200});return new Response('{}',{status:200});};
+ try {
+  const url=new URL(await beginGoogle(f.db,'owner'));const query={state:url.searchParams.get('state'),code:'code'};
+  await finishGoogle(f.db,query);const c=await f.db.get('google_connections','owner');assert.equal(c.tokens.includes('refresh-secret'),false);
+  await assert.rejects(()=>finishGoogle(f.db,query),/expired/);
+  await f.seed('accountability_requests',{id:'own',requester_id:'owner',title:'Mine',what_needed:'Help',scheduled_for:'2099-01-01',duration_minutes:30,status:'open'});
+  await f.seed('accountability_requests',{id:'other',requester_id:'partner',title:'Other private request',scheduled_for:'2099-01-01',duration_minutes:30,status:'open'});
+  const result=await syncMemberCalendar(f.db,'owner');assert.equal(result.updated,1);assert.equal(calls.filter(x=>x.url.includes('/events/')).length,1);assert.equal(calls.some(x=>String(x.options.body||'').includes('Other private request')),false);
+ } finally {global.fetch=oldFetch;if(oldId===undefined)delete process.env.GOOGLE_CLIENT_ID;else process.env.GOOGLE_CLIENT_ID=oldId;if(oldSecret===undefined)delete process.env.GOOGLE_CLIENT_SECRET;else process.env.GOOGLE_CLIENT_SECRET=oldSecret;}
 });
