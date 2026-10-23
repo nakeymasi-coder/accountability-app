@@ -35,6 +35,8 @@ function showError(id, msg) { const e = $(id); if (!e) return; e.textContent = m
 function friendly(err) { if (err && ["TimeoutError", "AbortError"].includes(err.name)) return "The server took too long. Please try again."; return (err && err.message) ? err.message : "Something didn't go through. Please check your connection and try again."; }
 
 /* ================= STATE ================= */
+let installPrompt = null;
+let googleReturn = "";
 let resetToken = "";
 let reminderBusy = false;
 let reminders = [];
@@ -61,7 +63,7 @@ async function api(path, options = {}) {
 async function call(path, options) { return api(path, options); }
 
 /* ================= SCREENS ================= */
-const SCREENS = ["auth", "reset-confirm", "reminders", "feed", "new-request", "request-detail", "calendar", "commitments", "account", "admin"];
+const SCREENS = ["auth", "install", "reset-confirm", "reminders", "feed", "new-request", "request-detail", "calendar", "commitments", "account", "admin"];
 function show(name) {
   navigationVersion++;
   showError("global-error", "");
@@ -155,10 +157,15 @@ async function loadCommitments() {
 }
 async function loadAccount() {
   const version = ++navigationVersion;
-  const [me, services] = await Promise.all([call("/api/me"), call("/api/services")]);
+  const [me, services, google] = await Promise.all([call("/api/me"), call("/api/services"), call("/api/google/status")]);
   if (version !== navigationVersion || !state.user) return;
   state.user = me.user;
   const u = state.user;
+  $("google-status").textContent = google.connected ? (google.error || (google.lastSyncedAt ? "Connected — last synced " + fmtWhen(google.lastSyncedAt) : "Connected — first sync will run shortly.")) : google.available ? "Ready — connect your Google account to start private calendar sync." : "Owner setup required: Google Calendar connection is being prepared. Notifications and phone installation are available now.";
+  $("btn-google-connect").disabled = !google.available;
+  $("btn-google-connect").textContent = google.connected ? "Reconnect Google Calendar" : "Connect my Google Calendar";
+  $("btn-google-sync").classList.toggle("hidden", !google.connected);
+  $("btn-google-disconnect").classList.toggle("hidden", !google.connected);
   $("account-email-status").textContent = services.emailReady ? "Community email: Ready — password resets and reminder emails are enabled." : "Community email: Owner setup needed. You do not need to connect your email account.";
   $("account-reminders").disabled = !services.emailReady;
   $("btn-test-reminder").disabled = !services.emailReady;
@@ -204,7 +211,7 @@ async function refreshReminders() {
     if (!state.user) return;
     reminders = data.notifications;
     const unread = reminders.filter(n => !n.read_at).length;
-    $("btn-reminders").textContent = unread ? `Reminders (${unread})` : "Reminders";
+    $("btn-reminders").textContent = unread ? `Notifications (${unread})` : "Notifications";
   } finally { reminderBusy = false; }
 }
 async function loadReminders() {
@@ -214,7 +221,8 @@ async function loadReminders() {
   const list = $("reminders-list"); list.innerHTML = "";
   reminders.forEach(n => {
     const card = document.createElement("article"); card.className = "card3d";
-    card.innerHTML = `<h3>${esc(n.title)}</h3><p>${esc(fmtWhen(n.starts_at))}</p><p>${n.read_at ? "Read" : "New reminder"} · Starting within ${esc(n.stage_minutes)} minutes</p>`;
+    const kind = n.kind === "request_posted" ? "New request" : n.kind === "supporter_joined" ? "Supporter joined" : "Commitment reminder";
+    card.innerHTML = `<h3>${esc(n.title)}</h3><p><strong>${esc(kind)}</strong>${n.read_at ? " · Read" : " · Unread"}</p><p>${esc(n.body || "Your commitment is coming up.")}</p><p>${esc(fmtWhen(n.starts_at))}</p>`;
     const button = document.createElement("button"); button.className = "pill-btn"; button.textContent = "Open request";
     button.onclick = () => openRequest(n.request_id).catch(e => toast(friendly(e))); card.appendChild(button); list.appendChild(card);
   });
@@ -225,6 +233,14 @@ async function refreshContent() { try { const d = await call("/api/content"); st
 
 /* ================= EVENTS ================= */
 function wire() {
+  $("btn-install-help").onclick = () => show("install");
+  $("btn-install-back").onclick = () => loadAccount();
+  $("btn-install-app").onclick = async () => { if (!installPrompt) return; await installPrompt.prompt(); await installPrompt.userChoice; installPrompt = null; $("btn-install-app").classList.add("hidden"); };
+  window.addEventListener("beforeinstallprompt", event => { event.preventDefault(); installPrompt = event; $("btn-install-app").classList.remove("hidden"); });
+  $("btn-google-connect").onclick = async () => { const d = await call("/api/google/connect", { method: "POST", body: {} }); location.assign(d.url); };
+  $("btn-google-sync").onclick = async () => { await call("/api/google/sync", { method: "POST", body: {} }); toast("Your Google calendar is up to date."); await loadAccount(); };
+  $("btn-google-disconnect").onclick = async () => { await call("/api/google/disconnect", { method: "POST", body: {} }); toast("Google disconnected. Existing events remain in your Google account."); await loadAccount(); };
+
   $("btn-reminders").onclick = () => loadReminders();
   $("btn-reminders-read").onclick = async () => { await call("/api/notifications/read", { method: "POST", body: {} }); await loadReminders(); };
   $("btn-reset-signin").onclick = () => { resetToken = ""; show("auth"); $("tab-signin").click(); };
@@ -309,9 +325,12 @@ window.addEventListener("unhandledrejection", e => { e.preventDefault(); showErr
 (async function init() {
   const fragment = new URLSearchParams(location.hash.slice(1));
   resetToken = fragment.get("reset") || "";
+  googleReturn = fragment.get("google") || "";
+  if (googleReturn) history.replaceState(null, "", location.pathname + location.search);
   if (resetToken) history.replaceState(null, "", location.pathname + location.search);
   wire();
   guardHandlers();
+  if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
   setInterval(() => { if (state.user && !document.hidden) refreshReminders().catch(() => {}); }, 60000);
   // The backend is required — probe its health endpoint briefly.
   // If it does not answer, show the server banner and save nothing.
@@ -328,7 +347,7 @@ window.addEventListener("unhandledrejection", e => { e.preventDefault(); showErr
   await refreshContent();
   if (resetToken) { show("reset-confirm"); return; }
   if (token()) {
-    try { const d = await call("/api/me"); state.user = d.user; setSignedInUI(); loadFeed(); refreshReminders().catch(() => {}); return; }
+    try { const d = await call("/api/me"); state.user = d.user; setSignedInUI(); if (googleReturn) { await loadAccount(); toast(googleReturn === "connected" ? "Google connected. Your private calendar will sync shortly." : "Google connection did not finish. Try again from Account."); } else loadFeed(); refreshReminders().catch(() => {}); return; }
     catch (error) { if (error.status === 401) localStorage.removeItem(CONFIG.TOKEN_KEY); else showError("global-error", friendly(error)); }
   }
   setSignedInUI();
