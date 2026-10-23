@@ -156,3 +156,20 @@ The live Netlify backend supports one-time password-reset links, in-app reminder
 5. Reminder email retries reuse a provider idempotency key. Calendar events stay grouped when several members support one request.
 
 Run regression tests with `node --test tests/api.test.cjs`. The tests use in-memory records and a mock email sender; they do not email real members. Email acceptance and inbox delivery must be checked after the sender is configured.
+
+## Phone installation, notifications, and private Google Calendar
+
+Members can open Account → Install on your phone for Android Chrome and iPhone Safari instructions. The installed app uses the same server account and saved data. The service worker caches the public app shell only; API responses and member records are never cached. An internet connection is needed to read and save community data.
+
+Notifications are saved per member for new requests, supporter joins, and upcoming commitments. The header shows unread counts on opening the app and refreshes while open. These are in-app notifications, not phone push notifications. Optional email reminders work while the app is closed.
+
+For automatic private Calendar sync on Netlify:
+
+1. Enable Google Calendar API in the app's Google Cloud project. Configure the OAuth consent screen for the members who will use it (a Testing app only permits listed test users).
+2. Create a Web application OAuth client. Authorized origin: `https://accountability-app-glam.netlify.app`. Authorized redirect URI: `https://accountability-app-glam.netlify.app/api/google/callback`.
+3. Add `GOOGLE_CLIENT_ID` and secret `GOOGLE_CLIENT_SECRET` to Netlify environment variables with Functions scope, then redeploy. Keep the client secret out of the browser and repository.
+4. Each member chooses Account → Connect Google Calendar and authorizes their own Google account. The app requests only `calendar.app.created`, creates a separate Glam Accountability calendar, and syncs that member's posted and joined commitments every five minutes. Sync now runs an immediate update.
+5. OAuth tokens are encrypted on the server. No other member can access a member's tokens or Google connection. Events are private and have no attendees. The app does not read unrelated Google calendars. Community requests remain visible to signed-in community members inside this app.
+6. Disconnect stops future synchronization; previously created Google events remain in the member's calendar.
+
+These newer integrations are implemented in the Netlify backend; the standalone JSON server and SQL blueprint are not equivalent deployment targets for these features.
