@@ -70,7 +70,7 @@
 
       <form id="reset-form" class="form hidden" novalidate>
         <h3>Reset your password</h3>
-        <p class="muted">Enter your email and we'll start a reset. For your safety, reset codes are never shown inside the app — use the code sent to your own email, or ask the community owner for help until email sending is connected.</p>
+        <p class="muted">Email password resets are not connected yet. Contact the community owner for help signing in.</p>
         <label>Email <input id="reset-email" type="email" autocomplete="email" required></label>
         <p id="reset-message" class="field-ok hidden"></p>
         <button class="pill-btn primary" type="submit">Request reset</button>
@@ -93,10 +93,11 @@
       <label>Title <input id="req-title" type="text" required maxlength="120" placeholder="Going live at 5 — need a partner"></label>
       <label>What do you need accountability for? <textarea id="req-what" required maxlength="1000" rows="3" placeholder="I want to go live at five but I keep putting it off…"></textarea></label>
       <label>What should your partner do? <textarea id="req-duties" required maxlength="1000" rows="3" placeholder="Join 10 minutes early, check in at 4:45, stay for the first 15 minutes…"></textarea></label>
+      <p class="muted small" id="timezone-note"></p>
       <label>Date &amp; time <input id="req-when" type="datetime-local" required></label>
       <label>How long (minutes) <input id="req-duration" type="number" min="5" max="480" value="30" required></label>
       <label>Where / link (optional) <input id="req-where" type="text" maxlength="300" placeholder="Zoom link, live platform, or place"></label>
-      <label>Link (optional) <input id="req-link" type="url" maxlength="2000" placeholder="https://… — Zoom link, live link, or post link for your partner"></label>
+      <label>Link (optional) <input id="req-link" type="text" inputmode="url" maxlength="2000" placeholder="https://… — Zoom link, live link, or post link for your partner"></label>
       <label class="hp" aria-hidden="true">Website <input id="req-website" type="text" tabindex="-1" autocomplete="off"></label>
       <p id="request-error" class="field-error hidden"></p>
       <div class="row"><button class="pill-btn primary big" type="submit">Post to the community</button>
@@ -113,7 +114,7 @@
       <div id="message-list" class="stack"></div>
       <p id="messages-empty" class="empty hidden">No replies yet. Say you're available, or ask what they need.</p>
       <form id="message-form" class="form" novalidate>
-        <label class="sr-only">Your reply <textarea id="message-body" required maxlength="1000" rows="2" placeholder="I'm available — what do you need me to do?"></textarea></label>
+        <label>Your reply <textarea id="message-body" required maxlength="1000" rows="2" placeholder="I'm available — what do you need me to do?"></textarea></label>
         <p id="message-error" class="field-error hidden"></p>
         <button class="pill-btn primary" type="submit">Reply</button>
       </form>
@@ -151,6 +152,7 @@
     <div class="card3d" id="privacy">
       <h3>Privacy Policy</h3>
       <div id="privacy-body" class="prose"></div>
+      <h3>How it works</h3><div id="help-body" class="prose"></div>
     </div>
   </section>
 
@@ -169,6 +171,7 @@
     <div class="card3d"><h3>Audit log</h3><div id="admin-audit" class="stack"></div></div>
   </section>
 
+<dialog id="privacy-dialog"><h2>Privacy Policy</h2><p id="privacy-dialog-body"></p><button id="close-privacy" class="pill-btn" type="button">Close</button></dialog>
 </main>
 
 <nav id="main-nav" class="bottom-nav hidden" aria-label="Main">
