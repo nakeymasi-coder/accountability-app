@@ -1,6 +1,10 @@
 import crypto from 'node:crypto';
 import { emailConfigured, sendAccountabilityEmail } from './email.mjs';
 const keyFor = (id) => `rec:notifications:${id}`;
+export function reminderEmail(to, startsAt, id, test = false) {
+  const site = process.env.URL || 'https://accountability-app-glam.netlify.app';
+  return { to, subject: `${test ? '[Test] ' : ''}Your accountability commitment is coming up`, text: `${test ? 'This is a delivery test, not a real commitment.\n\n' : ''}Your commitment starts at ${new Date(startsAt).toUTCString()}.\n\nOpen Accountability to view the details and supporters:\n${site}\n\nYou can turn off reminder emails in Account.`, idempotencyKey: `accountability-reminder/${id}` };
+}
 export async function createReminders(db, { userId, nowMs = Date.now(), deliverEmail = false, send = sendAccountabilityEmail, configured = emailConfigured } = {}) {
   const requests = await db.all('accountability_requests');
   const matches = await db.all('matches');
@@ -28,8 +32,7 @@ export async function createReminders(db, { userId, nowMs = Date.now(), deliverE
       }
       if (deliverEmail && Date.now() < deadline && note && !note.email_sent_at && member.reminder_email_opt_in === true && configured()) {
         try {
-          const site = process.env.URL || 'https://accountability-app-glam.netlify.app';
-          await send({ to: member.email, subject: 'Your accountability commitment is coming up', text: `Your commitment starts at ${new Date(request.scheduled_for).toUTCString()}.\n\nOpen Accountability to view the details and supporters:\n${site}\n\nYou can turn off reminder emails in Account.`, idempotencyKey: `accountability-reminder/${notificationId}` });
+          await send(reminderEmail(member.email, request.scheduled_for, notificationId));
           note.email_sent_at = new Date().toISOString(); await db.update('notifications', note); emails++;
         } catch (_) { /* Leave unsent; the next scheduled run retries with the same idempotency key. */ }
       }
