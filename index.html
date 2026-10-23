@@ -106,6 +106,20 @@
     <div class="card3d"><h3>iPhone · Safari</h3><ol><li>Open this app in Safari and sign in.</li><li>Tap <strong>Share</strong> (the square with an upward arrow).</li><li>Scroll down and tap <strong>Add to Home Screen</strong>.</li><li>If shown, turn on <strong>Open as Web App</strong>, then tap <strong>Add</strong>.</li></ol></div>
     <div class="card3d"><h3>Notifications and reminders</h3><p>Open the app and tap <strong>Notifications</strong> for unread requests, supporters, and commitment reminders. Email reminders arrive even while this app is closed if you turn them on in Account. Phone push notifications are not included.</p></div>
   </section>
+  <section id="screen-home" class="screen hidden" aria-labelledby="home-title">
+    <div class="home-hero">
+      <div class="home-hero-copy"><p class="home-eyebrow">YOUR PRIVATE ACCOUNTABILITY CIRCLE</p><p id="home-greeting" class="home-greeting">Welcome back.</p><h2 id="home-title">Big goals.<br>Better together.</h2><p class="home-intro">A little support. A clear plan. Someone in your corner. This is your space to ask for accountability, support a member, and follow through.</p><div class="row"><button id="home-post" class="pill-btn home-primary" type="button">Ask for support</button><button id="home-browse" class="pill-btn home-secondary" type="button">Find someone to support</button></div></div>
+      <div class="home-orbit" aria-hidden="true"><div class="orbit-ring ring-one"></div><div class="orbit-ring ring-two"></div><div class="orbit-core"><span>SHOW UP</span><strong>for you.</strong><span>FOR EACH OTHER.</span></div><span class="orbit-dot dot-one"></span><span class="orbit-dot dot-two"></span></div>
+    </div>
+    <div class="home-stats" aria-label="Your community at a glance"><button id="home-stat-feed" class="home-stat" type="button"><strong id="home-open-count">—</strong><span>Requests to support</span></button><button id="home-stat-mine" class="home-stat" type="button"><strong id="home-upcoming-count">—</strong><span>Your upcoming plans</span></button><button id="home-stat-alerts" class="home-stat" type="button"><strong id="home-unread-count">—</strong><span>Unread notifications</span></button></div>
+    <div class="home-section-heading"><div><p class="home-eyebrow">MAKE ROOM FOR FOLLOW-THROUGH</p><h3>Your next step</h3></div><button id="home-calendar" class="link-btn" type="button">View calendar →</button></div>
+    <div id="home-next" class="home-next" aria-live="polite"><p>Loading your next commitment…</p></div>
+    <div class="home-section-heading"><div><p class="home-eyebrow">SIMPLE BY DESIGN</p><h3>Here’s how we show up.</h3></div></div>
+    <div class="home-how"><article><span class="home-step">01</span><h4>Ask clearly.</h4><p>Post your goal, choose a time, and tell supporters exactly what you need.</p></article><article><span class="home-step">02</span><h4>Find your people.</h4><p>Members can join your request. More than one supporter is welcome.</p></article><article><span class="home-step">03</span><h4>Follow through.</h4><p>Check your calendar, open your reminders, and mark your commitment complete.</p></article></div>
+    <div class="home-footer"><p><strong>Take your circle with you.</strong><br>Install on your phone, connect your private Google Calendar, and choose email reminders in Account.</p><button id="home-setup" class="pill-btn" type="button">Set up my account →</button></div>
+    <p id="home-error" class="field-error hidden" role="alert"></p>
+  </section>
+
   <!-- ===== FEED ===== -->
   <section id="screen-feed" class="screen hidden">
     <div class="row-between"><h2>Community Feed</h2><button id="btn-new-request" class="pill-btn primary" type="button">+ New Request</button></div>
@@ -213,7 +227,8 @@
 </main>
 
 <nav id="main-nav" class="bottom-nav hidden" aria-label="Main">
-  <button data-nav="feed" class="nav-btn active" type="button">Feed</button>
+  <button data-nav="home" class="nav-btn active" type="button">Home</button>
+  <button data-nav="feed" class="nav-btn" type="button">Feed</button>
   <button data-nav="calendar" class="nav-btn" type="button">Calendar</button>
   <button data-nav="commitments" class="nav-btn" type="button">Mine</button>
   <button data-nav="account" class="nav-btn" type="button">Account</button>
