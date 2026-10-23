@@ -70,7 +70,7 @@
 
       <form id="reset-form" class="form hidden" novalidate>
         <h3>Reset your password</h3>
-        <p class="muted">Enter your account email. We’ll send a private reset link when email delivery is connected.</p>
+        <p class="muted">Enter your account email. We’ll send a private reset link valid for 30 minutes.</p>
         <label>Email <input id="reset-email" type="email" autocomplete="email" required></label>
         <p id="reset-message" class="field-ok hidden"></p>
         <button class="pill-btn primary" type="submit">Request reset</button>
@@ -92,7 +92,7 @@
   </section>
   <section id="screen-reminders" class="screen hidden">
     <div class="row-between"><h2>My Reminders</h2><button id="btn-reminders-read" class="pill-btn" type="button">Mark all read</button></div>
-    <p class="muted">Reminders appear about 1 hour and 15 minutes before your commitments. Open the app to see them. Email reminders are optional in Account.</p>
+    <p class="muted">Reminders appear about 1 hour before and again 15 minutes before your commitments. Open the app to see them. Email reminders are optional in Account.</p>
     <div id="reminders-list" class="stack"></div>
     <p id="reminders-empty" class="empty hidden">No reminders due yet. Your upcoming commitments are in Calendar and Mine.</p>
   </section>
@@ -157,8 +157,12 @@
     <h2>My Account</h2>
     <div class="card3d">
       <p><strong id="account-name"></strong><br><span id="account-email" class="muted"></span><br><span id="account-role" class="badge"></span></p>
-      <label class="check"><input id="account-marketing" type="checkbox"> <span>Email me community news and updates (uncheck to unsubscribe)</span></label>
-      <label class="check"><input id="account-reminders" type="checkbox"> <span>Email me reminders for my accountability commitments (requires email delivery to be connected)</span></label>
+      <label class="check"><input id="account-marketing" type="checkbox"> <span>Email me community news when available (optional)</span></label>
+      <p id="account-email-status" class="field-ok" role="status"></p>
+      <p class="muted small">Emails go to the address shown above. Gmail, Outlook, Yahoo, and other email addresses work—there is no personal email account to connect.</p>
+      <label class="check"><input id="account-reminders" type="checkbox"> <span>Email me reminders for my accountability commitments</span></label>
+      <button id="btn-test-reminder" class="pill-btn" type="button">Send test reminder to my email</button>
+      <p id="test-reminder-message" class="field-ok hidden" role="status"></p>
       <div class="stack">
         <button id="btn-export" class="pill-btn" type="button">Export my data</button>
         <pre id="export-output" class="export hidden"></pre>
@@ -184,8 +188,8 @@
       <div id="admin-invites" class="stack"></div>
     </div>
     <div class="card3d"><h3>Content</h3><div id="admin-content" class="stack"></div></div>
-    <div class="card3d"><h3>Integrations</h3><div id="admin-integrations" class="stack"></div>
-      <p class="muted small">Status only. Keys and secrets live on the server in environment variables — never in this app or in the repo.</p></div>
+    <div class="card3d"><h3>What’s working</h3><div id="admin-integrations" class="stack"></div>
+      <p class="muted small">Community email is managed by the owner. Members receive emails at their sign-up address; they do not connect Gmail. Google Calendar sync and automatic Zoom meeting creation are not included.</p></div>
     <div class="card3d"><h3>Audit log</h3><div id="admin-audit" class="stack"></div></div>
   </section>
 
