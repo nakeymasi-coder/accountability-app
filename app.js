@@ -117,7 +117,7 @@ async function loadHome() {
     $("home-unread-count").textContent = notifications.notifications.filter(n => !n.read_at).length;
     const next = upcoming[0], box = $("home-next");
     box.innerHTML = next ? `<div><span class="home-next-label">${esc(next.role)}</span><h4>${esc(next.title)}</h4><p>${esc(fmtWhen(next.when))}</p></div>` : '<div><span class="home-next-label">YOUR NEXT CHAPTER STARTS HERE</span><h4>One goal. One first step.</h4><p>No upcoming commitments yet. Ask for support or explore the community feed to get started.</p></div>';
-    const button = document.createElement("button"); button.className = "pill-btn"; button.type = "button"; button.textContent = next ? "View commitment →" : "Explore the feed →"; button.onclick = () => next ? openRequest(next.id).catch(e => toast(friendly(e))) : loadFeed(); box.appendChild(button);
+    const button = document.createElement("button"); button.className = "pill-btn"; button.type = "button"; button.textContent = next ? "View commitment →" : "Explore the feed →"; button.onclick = async () => { try { if (next) await openRequest(next.id); else await loadFeed(); } catch(e) { toast(friendly(e)); } }; box.appendChild(button);
   } catch (error) {
     if (version !== navigationVersion) return;
     $("home-next").innerHTML = "<p>Your plans couldn’t load. Tap Home to try again.</p>";
@@ -172,7 +172,9 @@ async function loadCalendar() {
 }
 async function loadCommitments() {
   const version = ++navigationVersion;
-  const data = await call("/api/commitments"); if (version !== navigationVersion) return; const list = $("commitments-list"); list.innerHTML = "";
+  const [data, feed] = await Promise.all([call("/api/commitments"), call("/api/requests")]); if (version !== navigationVersion || !state.user) return; const list = $("commitments-list"); list.innerHTML = "";
+  const unmatched = feed.requests.filter(r => r.requester_id === state.user.id && !data.matches.some(m => m.request_id === r.id));
+  unmatched.forEach(r => list.appendChild(requestCard(r, true)));
   data.matches.forEach((m) => {
     const d = document.createElement("div"); d.className = "card3d";
     d.innerHTML = `<h3>${esc(m.request_title)}</h3><p class="meta">${esc(fmtWhen(m.scheduled_for))}</p><p>${esc(m.requester_name)} + ${esc(m.partner_name)} · <span class="badge">${esc(m.status)}</span></p>`;
@@ -182,7 +184,7 @@ async function loadCommitments() {
     const lp = linkPill(m.link_url); if (lp) d.appendChild(lp);
     list.appendChild(d);
   });
-  $("commitments-empty").classList.toggle("hidden", data.matches.length > 0); show("commitments");
+  $("commitments-empty").classList.toggle("hidden", data.matches.length + unmatched.length > 0); show("commitments");
 }
 async function loadAccount() {
   const version = ++navigationVersion;
@@ -270,6 +272,9 @@ function wire() {
   $("home-stat-alerts").onclick = () => loadReminders();
   $("home-calendar").onclick = () => loadCalendar();
   $("home-setup").onclick = () => loadAccount();
+  $("home-install").onclick = () => show("install");
+  $("home-google").onclick = () => loadAccount();
+  $("home-email").onclick = () => loadAccount();
   $("btn-install-help").onclick = () => show("install");
   $("btn-install-back").onclick = () => loadAccount();
   $("btn-install-app").onclick = async () => { if (!installPrompt) return; await installPrompt.prompt(); await installPrompt.userChoice; installPrompt = null; $("btn-install-app").classList.add("hidden"); };
