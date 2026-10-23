@@ -16,7 +16,7 @@
 import { getStore } from "@netlify/blobs";
 import crypto from "node:crypto";
 import { emailConfigured, sendAccountabilityEmail } from "../../server/lib/email.mjs";
-import { createReminders } from "../../server/lib/reminders.mjs";
+import { createReminders, reminderEmail } from "../../server/lib/reminders.mjs";
 
 const OWNER_ADMIN_EMAIL = "nakeymasi@gmail.com"; // the ONLY account that can ever be admin
 const STORE_NAME = "accountability";
@@ -357,6 +357,19 @@ async function handle(db, method, rawPath, headers, body, ip) {
     return { status: 200, obj: { ok: true } };
   }
 
+  if (p === "/api/services" && method === "GET") {
+    await requireAuth(db, headers);
+    return { status: 200, obj: { emailReady: emailConfigured(), personalEmailConnectionRequired: false } };
+  }
+  if (p === "/api/me/test-reminder" && method === "POST") {
+    const { profile } = await requireAuth(db, headers);
+    if (await rateLimited(db, ip, "test-reminder")) failWith(429, "Please wait before sending another test.");
+    if (!emailConfigured()) failWith(503, "Community email delivery needs the owner's setup. Members don't need to connect Gmail.");
+    try { await sendAccountabilityEmail(reminderEmail(profile.email, new Date(Date.now() + 15 * 60000).toISOString(), `test-${crypto.randomUUID()}`, true)); }
+    catch (_) { failWith(503, "The email service couldn't send this test. Please contact the community owner."); }
+    return { status: 200, obj: { ok: true, message: "Test reminder sent to your account email. Check your inbox and spam folder." } };
+  }
+
   /* ----- Me ----- */
   if (p === "/api/me" && method === "GET") {
     const { profile } = await requireAuth(db, headers);
@@ -614,14 +627,12 @@ async function handle(db, method, rawPath, headers, body, ip) {
       return { status: 200, obj: { content: c } };
     }
     if (p === "/api/admin/integrations" && method === "GET") {
-      // Status only. Whether a provider counts as connected is read from
-      // environment variables — secrets themselves are never returned.
-      const envMap = { zoom: "ZOOM_ACCOUNT_ID", google_calendar: "GOOGLE_CALENDAR_ID", email: "EMAIL_FROM" };
-      const integrations = (await db.all("integration_connections")).map((i) => ({
-        ...i,
-        status: i.provider === "email" ? (emailConfigured() ? "configured" : "not_connected") : process.env[envMap[i.provider]] ? "configured_not_connected" : "not_connected",
-        last_checked_at: now(),
-      }));
+      const integrations = [
+        { provider: "Community email", status: emailConfigured() ? "Ready" : "Owner setup needed", description: "Sends password-reset links and opted-in reminders to members' sign-up email. No Gmail connection needed." },
+        { provider: "Shared app calendar", status: "Available", description: "Matched requests appear in the Calendar tab with all supporters." },
+        { provider: "Zoom meeting links", status: "Available", description: "Paste an existing Zoom link into a request. The app does not create Zoom meetings." },
+        { provider: "Google Calendar sync", status: "Not included", description: "The Calendar tab works inside this app. Automatic Google Calendar sync is not built." },
+      ];
       return { status: 200, obj: { integrations } };
     }
     if (p === "/api/admin/audit" && method === "GET") {
