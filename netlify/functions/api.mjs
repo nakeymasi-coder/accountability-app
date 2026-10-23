@@ -38,22 +38,17 @@ class Db {
   }
   async all(table) {
     if (this.cache.has(table)) return this.cache.get(table);
-    let rows = [];
-    try {
-      // Strong consistency: default Blobs reads lag writes by ~10–60s, which
-      // made fresh sign-ups, sessions and posts look like they never saved.
-      const { blobs } = await this.store.list({ prefix: `rec:${table}:`, consistency: "strong" });
-      const fetched = await Promise.all((blobs || []).map((b) =>
-        this.store.get(b.key, { type: "json", consistency: "strong" }).catch(() => null)
-      ));
-      rows = fetched.filter(Boolean);
-    } catch (_) { /* empty store behaves as an empty table */ }
+    const rows = [];
+    // Read every page and fail closed on storage errors; never treat an outage as an empty database.
+    for await (const page of this.store.list({ prefix: `rec:${table}:`, paginate: true })) {
+      const fetched = await Promise.all(page.blobs.map(b => this.store.get(b.key, { type: "json", consistency: "strong" })));
+      rows.push(...fetched.filter(Boolean));
+    }
     this.cache.set(table, rows);
     return rows;
   }
   async get(table, id) {
-    const rows = await this.all(table);
-    return rows.find((r) => r.id === id) || null;
+    return this.getDirect(table, id);
   }
   /* Direct strong-consistency read of one known key — bypasses list(), whose
      lag is what made brand-new sessions invisible to requireAuth. */
@@ -61,7 +56,7 @@ class Db {
     try {
       const row = await this.store.get(keyFor(table, id), { type: "json", consistency: "strong" });
       return row || null;
-    } catch (_) { return null; }
+    } catch (error) { throw error; }
   }
   async put(table, row) {
     await this.store.setJSON(keyFor(table, row.id), row);
@@ -306,8 +301,8 @@ async function handle(db, method, rawPath, headers, body, ip) {
         await db.update("credentials", cred);
       }
     }
-    // Same friendly answer whether or not the account exists.
-    return { status: 200, obj: { ok: true, message: "If an account exists for that email, a reset is on its way. For your safety, reset codes are never shown inside the app — use the code sent to your own email, or ask the owner for help until email sending is connected.", resetToken: null } };
+    // Same answer whether or not the account exists; no mail provider is implemented.
+    return { status: 200, obj: { ok: true, message: "Password reset by email is not available yet. Please contact the community owner for help. No reset email has been sent.", resetToken: null } };
   }
 
   /* ----- Me ----- */
@@ -345,11 +340,13 @@ async function handle(db, method, rawPath, headers, body, ip) {
     if (await rateLimited(db, ip, "new-request")) failWith(429, "You're posting a lot just now. Please wait a bit and try again.");
     if (body.website) failWith(400, "That post couldn't be accepted."); // honeypot
     const title = clean(body.title, 120), what = clean(body.what_needed, 1000), duties = clean(body.partner_duties, 1000);
-    const when = new Date(body.scheduled_for);
+    const when = new Date(body.scheduled_for || "");
     if (!title || !what || !duties || isNaN(when)) failWith(400, "Please fill in the title, what you need accountability for, what your partner should do, and a valid date and time.");
     const linkUrl = normalizeLinkUrl(clean(body.link_url, 2000));
     if (!validHttpUrl(linkUrl)) failWith(400, LINK_ERROR);
-    const duration = Math.max(5, Math.min(480, Number(body.duration_minutes) || 30));
+    if (when <= new Date()) failWith(400, "Choose a future date and time.");
+    const duration = Number(body.duration_minutes);
+    if (!Number.isInteger(duration) || duration < 5 || duration > 480) failWith(400, "Choose a whole number of minutes between 5 and 480.");
     const dup = (await db.all("accountability_requests")).find((r) => r.requester_id === me.id && r.title === title && r.scheduled_for === when.toISOString() && r.status !== "cancelled");
     if (dup) failWith(409, "You already posted this exact request for that time — it's in the feed already.");
     const r = await db.insert("accountability_requests", { requester_id: me.id, title, what_needed: what, partner_duties: duties, scheduled_for: when.toISOString(), duration_minutes: duration, location_or_link: clean(body.location_or_link, 300), link_url: linkUrl, status: "open" });
@@ -361,12 +358,23 @@ async function handle(db, method, rawPath, headers, body, ip) {
     if (!r) failWith(404, FRIENDLY.notFound);
     return { status: 200, obj: { request: await withRequester(r) } };
   }
+  if (seg[1] === "requests" && seg.length === 3 && method === "PATCH") {
+    const { profile: me } = await requireAuth(db, headers);
+    const r = await db.get("accountability_requests", seg[2]);
+    if (!r || r.requester_id !== me.id) failWith(404, FRIENDLY.notFound);
+    if (body.status !== "cancelled" || !["open", "matched"].includes(r.status)) failWith(400, "Only an open or matched request can be cancelled.");
+    r.status = "cancelled"; await db.update("accountability_requests", r);
+    for (const m of (await db.all("matches")).filter(m => m.request_id === r.id && m.status === "active")) { m.status = "released"; await db.update("matches", m); }
+    for (const e of (await db.all("calendar_events")).filter(e => e.request_id === r.id && e.status === "scheduled")) { e.status = "cancelled"; await db.update("calendar_events", e); }
+    return { status: 200, obj: { request: r } };
+  }
   if (seg[1] === "requests" && seg[3] === "claim" && method === "POST") {
     const { profile: me } = await requireAuth(db, headers);
     const r = await db.get("accountability_requests", seg[2]);
     if (!r) failWith(404, FRIENDLY.notFound);
     if (r.requester_id === me.id) failWith(400, "You can't claim your own request — a partner has to claim it.");
-    if (r.status !== "open") failWith(409, "This request was already claimed by someone else.");
+    if (r.status !== "open") failWith(409, "This request is no longer open.");
+    if (new Date(r.scheduled_for) <= new Date()) failWith(400, "This request is in the past. Ask the requester to post a new time.");
     const match = await db.insert("matches", { request_id: r.id, requester_id: r.requester_id, partner_id: me.id, status: "active", completed_at: null, notes: "" });
     r.status = "matched"; await db.update("accountability_requests", r);
     const start = new Date(r.scheduled_for);
@@ -397,11 +405,12 @@ async function handle(db, method, rawPath, headers, body, ip) {
     const m = await db.get("matches", seg[2]);
     if (!m || (m.partner_id !== me.id && m.requester_id !== me.id)) failWith(404, FRIENDLY.notFound);
     if (!["completed", "released", "no_show"].includes(body.status)) failWith(400, "Pick completed, released, or no-show.");
+    if (m.status !== "active") failWith(409, "This commitment has already been updated. Refresh Mine to see its status.");
     m.status = body.status; m.completed_at = body.status === "completed" ? now() : null;
     await db.update("matches", m);
     const r = await db.get("accountability_requests", m.request_id);
-    if (r && body.status === "released") { r.status = "open"; await db.update("accountability_requests", r); }
-    if (r && body.status === "completed") { r.status = "completed"; await db.update("accountability_requests", r); }
+    if (r && r.status !== "cancelled" && body.status === "released") { r.status = "open"; await db.update("accountability_requests", r); }
+    if (r && ["completed", "no_show"].includes(body.status)) { r.status = body.status; await db.update("accountability_requests", r); }
     const ev = (await db.all("calendar_events")).find((x) => x.match_id === m.id);
     if (ev) { ev.status = body.status === "released" ? "cancelled" : body.status; await db.update("calendar_events", ev); }
     return { status: 200, obj: { match: m } };
@@ -466,7 +475,13 @@ async function handle(db, method, rawPath, headers, body, ip) {
   if (p === "/api/account" && method === "DELETE") {
     const { profile: me } = await requireAuth(db, headers);
     await db.insert("data_requests", { user_id: me.id, kind: "delete", status: "completed", completed_at: now() });
-    await db.removeWhere("messages", (m) => m.sender_id === me.id);
+    const owned = new Set((await db.all("accountability_requests")).filter(r => r.requester_id === me.id).map(r => r.id));
+    // Reopen the other member's request when their partner leaves.
+    for (const match of (await db.all("matches")).filter(m => m.partner_id === me.id && m.status === "active")) {
+      const request = await db.get("accountability_requests", match.request_id);
+      if (request && request.status === "matched") { request.status = "open"; await db.update("accountability_requests", request); }
+    }
+    await db.removeWhere("messages", (m) => m.sender_id === me.id || owned.has(m.request_id));
     await db.removeWhere("calendar_events", (e) => e.requester_id === me.id || e.partner_id === me.id);
     await db.removeWhere("matches", (m) => m.requester_id === me.id || m.partner_id === me.id);
     await db.removeWhere("accountability_requests", (r) => r.requester_id === me.id);
@@ -522,7 +537,7 @@ async function handle(db, method, rawPath, headers, body, ip) {
       const envMap = { zoom: "ZOOM_ACCOUNT_ID", google_calendar: "GOOGLE_CALENDAR_ID", email: "EMAIL_FROM" };
       const integrations = (await db.all("integration_connections")).map((i) => ({
         ...i,
-        status: process.env[envMap[i.provider]] ? "connected" : i.status,
+        status: process.env[envMap[i.provider]] ? "configured_not_connected" : "not_connected",
         last_checked_at: now(),
       }));
       return { status: 200, obj: { integrations } };
@@ -545,7 +560,7 @@ function normalizePath(pathname) {
   return pathname;
 }
 async function run(method, pathname, headers, body, ip) {
-  const db = new Db(getStore(STORE_NAME));
+  const db = new Db(getStore({ name: STORE_NAME, consistency: "strong" }));
   try {
     return await handle(db, method, normalizePath(pathname), headers, body || {}, ip || "unknown");
   } catch (err) {
@@ -566,7 +581,7 @@ export default async function handlerV2(req) {
   req.headers.forEach((v, k) => { headers[k.toLowerCase()] = v; });
   const ip = headers["x-nf-client-connection-ip"] || (headers["x-forwarded-for"] || "").split(",")[0].trim() || "unknown";
   const { status, obj } = await run(req.method, url.pathname, headers, body, ip);
-  return new Response(JSON.stringify(obj), { status, headers: { "Content-Type": "application/json" } });
+  return new Response(JSON.stringify(obj), { status, headers: { "Content-Type": "application/json", "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" } });
 }
 
 /* Netlify Functions v1 (Lambda-style) — same core. */
@@ -577,5 +592,5 @@ export async function handler(event) {
   for (const [k, v] of Object.entries(event.headers || {})) headers[k.toLowerCase()] = v;
   const ip = headers["x-nf-client-connection-ip"] || (headers["x-forwarded-for"] || "").split(",")[0].trim() || "unknown";
   const { status, obj } = await run(event.httpMethod || "GET", event.path || "/", headers, body, ip);
-  return { statusCode: status, headers: { "Content-Type": "application/json" }, body: JSON.stringify(obj) };
+  return { statusCode: status, headers: { "Content-Type": "application/json", "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" }, body: JSON.stringify(obj) };
 }
