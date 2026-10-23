@@ -6,6 +6,8 @@
 <title>Accountability App — Glam's Private Community</title>
 <meta name="description" content="Invite-only accountability app: post a request, match with a partner, show up together.">
 <meta name="theme-color" content="#7db4ff">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Accountability">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="styles.css">
@@ -21,7 +23,7 @@
       <p>Private community · Invite only</p>
     </div>
   </div>
-  <div class="header-actions"><button id="btn-reminders" class="pill-btn ghost hidden" type="button">Reminders</button><button id="btn-signout" class="pill-btn ghost hidden" type="button">Sign out</button></div>
+  <div class="header-actions"><button id="btn-reminders" class="pill-btn ghost hidden" type="button">Notifications</button><button id="btn-signout" class="pill-btn ghost hidden" type="button">Sign out</button></div>
 </header>
 
 <div id="server-banner" class="server-banner hidden" role="alert">
@@ -91,10 +93,18 @@
     </form>
   </section>
   <section id="screen-reminders" class="screen hidden">
-    <div class="row-between"><h2>My Reminders</h2><button id="btn-reminders-read" class="pill-btn" type="button">Mark all read</button></div>
-    <p class="muted">Reminders appear about 1 hour before and again 15 minutes before your commitments. Open the app to see them. Email reminders are optional in Account.</p>
+    <div class="row-between"><h2>Notifications</h2><button id="btn-reminders-read" class="pill-btn" type="button">Mark all read</button></div>
+    <p class="muted">See new community requests, supporters joining your requests, and reminders about 1 hour and 15 minutes before your commitments. The unread count appears when you open the app.</p>
     <div id="reminders-list" class="stack"></div>
-    <p id="reminders-empty" class="empty hidden">No reminders due yet. Your upcoming commitments are in Calendar and Mine.</p>
+    <p id="reminders-empty" class="empty hidden">You’re all caught up. New requests and upcoming commitments will appear here.</p>
+  </section>
+  <section id="screen-install" class="screen hidden">
+    <div class="row-between"><h2>Install on your phone</h2><button id="btn-install-back" class="pill-btn" type="button">Back to Account</button></div>
+    <p class="muted">Add Accountability to your home screen. Your account and saved commitments stay on the server when you switch devices. An internet connection is needed to load updates and save changes.</p>
+    <button id="btn-install-app" class="pill-btn primary hidden" type="button">Install Accountability</button>
+    <div class="card3d"><h3>Android · Chrome</h3><ol><li>Open this app in Chrome and sign in.</li><li>Tap the three dots at the top right.</li><li>Tap <strong>Install app</strong> or <strong>Add to Home screen</strong>, then confirm.</li><li>Tap the Accountability icon on your home screen to open it.</li></ol></div>
+    <div class="card3d"><h3>iPhone · Safari</h3><ol><li>Open this app in Safari and sign in.</li><li>Tap <strong>Share</strong> (the square with an upward arrow).</li><li>Scroll down and tap <strong>Add to Home Screen</strong>.</li><li>If shown, turn on <strong>Open as Web App</strong>, then tap <strong>Add</strong>.</li></ol></div>
+    <div class="card3d"><h3>Notifications and reminders</h3><p>Open the app and tap <strong>Notifications</strong> for unread requests, supporters, and commitment reminders. Email reminders arrive even while this app is closed if you turn them on in Account. Phone push notifications are not included.</p></div>
   </section>
   <!-- ===== FEED ===== -->
   <section id="screen-feed" class="screen hidden">
@@ -154,7 +164,7 @@
 
   <!-- ===== ACCOUNT ===== -->
   <section id="screen-account" class="screen hidden">
-    <h2>My Account</h2>
+    <div class="row-between"><h2>My Account</h2><button id="btn-install-help" class="pill-btn" type="button">Install on phone</button></div>
     <div class="card3d">
       <p><strong id="account-name"></strong><br><span id="account-email" class="muted"></span><br><span id="account-role" class="badge"></span></p>
       <label class="check"><input id="account-marketing" type="checkbox"> <span>Email me community news when available (optional)</span></label>
@@ -170,6 +180,12 @@
         <p class="muted small">Your account data is kept until you delete your account, or the owner removes it after 24 months inactive. Export or delete any time — deleting can't be undone.</p>
         <p id="account-message" class="field-ok hidden"></p>
       </div>
+    </div>
+    <div class="card3d"><h3>My private Google Calendar</h3>
+      <p>Connect your own Google account to automatically sync requests you post and commitments you join into a separate <strong>Glam Accountability</strong> calendar. Updates sync about every five minutes. The app does not read your other calendars or add other members as guests.</p>
+      <p id="google-status" role="status"></p>
+      <div class="row"><button id="btn-google-connect" class="pill-btn primary" type="button">Connect my Google Calendar</button><button id="btn-google-sync" class="pill-btn hidden" type="button">Sync now</button><button id="btn-google-disconnect" class="pill-btn ghost hidden" type="button">Disconnect Google</button></div>
+      <p class="muted small">Only you can connect or disconnect your Google account. Disconnect stops future syncing; events already in Google stay there. Keep the calendar private in Google Calendar’s sharing settings. Community requests remain visible to signed-in members inside this app.</p>
     </div>
     <div class="card3d" id="privacy">
       <h3>Privacy Policy</h3>
