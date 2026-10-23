@@ -82,9 +82,10 @@ function requestCard(r, mine) {
     <p>${esc(r.what_needed)}</p>
     <p><strong>Partner:</strong> ${esc(r.partner_duties)}</p>
     <p><span class="badge ${esc(r.status)}">${esc(r.status)}</span> <span class="badge">💬 ${esc(r.message_count ?? 0)} replies</span></p>`;
+  const names = document.createElement("p"); names.textContent = "Supporters: " + ((r.supporters || []).map(p => p.name).join(", ") || "Be the first to join"); el.appendChild(names);
   const row = document.createElement("div"); row.className = "row";
   const open = document.createElement("button"); open.className = "pill-btn"; open.textContent = "Open & reply"; open.onclick = () => openRequest(r.id).catch(e => toast(friendly(e))); row.appendChild(open);
-  if (!mine && r.status === "open" && new Date(r.scheduled_for) > new Date()) { const c = document.createElement("button"); c.className = "pill-btn primary"; c.textContent = "I'm available — Claim"; c.onclick = () => claimRequest(r.id); row.appendChild(c); }
+  if (!mine && ["open", "matched"].includes(r.status) && !(r.supporters || []).some(p => p.id === state.user.id) && new Date(r.scheduled_for) > new Date()) { const c = document.createElement("button"); c.className = "pill-btn primary"; c.textContent = "I'm available — Support"; c.onclick = () => claimRequest(r.id); row.appendChild(c); }
   const lp = linkPill(r.link_url); if (lp) row.appendChild(lp);
   el.appendChild(row); return el;
 }
@@ -105,8 +106,9 @@ async function openRequest(id) {
   $("detail-card").innerHTML = `<h3>${esc(r.title)}</h3><p class="meta">${esc(fmtWhen(r.scheduled_for))} · ${esc(r.duration_minutes)} min${r.location_or_link ? " · " + esc(r.location_or_link) : ""}</p>
     <p><strong>Needs accountability for:</strong> ${esc(r.what_needed)}</p><p><strong>Partner should:</strong> ${esc(r.partner_duties)}</p>
     <p><span class="badge ${esc(r.status)}">${esc(r.status)}</span></p>`;
-  if (r.status === "open" && r.requester_id !== state.user.id && new Date(r.scheduled_for) > new Date()) {
-    const b = document.createElement("button"); b.className = "pill-btn primary big"; b.textContent = "I'm available — Claim this request";
+  const supporters = document.createElement("p"); supporters.textContent = "Supporters: " + ((r.supporters || []).map(p => p.name).join(", ") || "No supporters yet"); $("detail-card").appendChild(supporters);
+  if (["open", "matched"].includes(r.status) && r.requester_id !== state.user.id && !(r.supporters || []).some(p => p.id === state.user.id) && new Date(r.scheduled_for) > new Date()) {
+    const b = document.createElement("button"); b.className = "pill-btn primary big"; b.textContent = "I'm available — Join supporters";
     b.onclick = () => claimRequest(id); $("detail-card").appendChild(b);
   }
   if (r.requester_id === state.user.id && ["open", "matched"].includes(r.status)) {
@@ -124,13 +126,13 @@ async function loadMessages() {
   $("messages-empty").classList.toggle("hidden", data.messages.length > 0);
 }
 async function claimRequest(id) {
-  try { await call(`/api/requests/${id}/claim`, { method: "POST", body: {} }); toast("You're matched! It's on the shared calendar now."); await loadFeed(); }
+  try { await call(`/api/requests/${id}/claim`, { method: "POST", body: {} }); toast("You're supporting this request! It's on the shared calendar now."); await loadFeed(); }
   catch (e) { toast(friendly(e)); }
 }
 async function loadCalendar() {
   const version = ++navigationVersion;
   const data = await call("/api/calendar"); if (version !== navigationVersion) return; const list = $("calendar-list"); list.innerHTML = "";
-  data.events.forEach((e) => { const d = document.createElement("div"); d.className = "card3d"; d.innerHTML = `<h3>${esc(e.title)}</h3><p class="meta">${esc(fmtWhen(e.starts_at))} – ${esc(fmtWhen(e.ends_at))}</p><p>${esc(e.requester_name)} + accountability partner ${esc(e.partner_name)}</p>`; const lp = linkPill(e.link_url); if (lp) d.appendChild(lp); list.appendChild(d); });
+  data.events.forEach((e) => { const d = document.createElement("div"); d.className = "card3d"; d.innerHTML = `<h3>${esc(e.title)}</h3><p class="meta">${esc(fmtWhen(e.starts_at))} – ${esc(fmtWhen(e.ends_at))}</p><p>${esc(e.requester_name)} + supporters: ${esc(e.partner_name)}</p>`; const lp = linkPill(e.link_url); if (lp) d.appendChild(lp); list.appendChild(d); });
   $("calendar-empty").classList.toggle("hidden", data.events.length > 0); show("calendar");
 }
 async function loadCommitments() {
@@ -155,7 +157,7 @@ async function loadAccount() {
   const privacy = state.content.find((c) => c.slug === "privacy-policy");
   $("privacy-body").innerHTML = privacy ? `<p>${esc(privacy.body)}</p>` : "<p>Privacy Policy coming soon.</p>";
   const help = state.content.find((c) => c.slug === "how-it-works");
-  $("help-body").textContent = help ? help.body : "Post a request, let a member claim it, then find your match in Mine and Calendar.";
+  $("help-body").textContent = "Post a request with a future time and explain what support you need. Several members can join the same request. Each supporter can track their own commitment in Mine; Calendar groups all supporters under one event. Use Open & reply to talk together, or Cancel request if your plans change.";
   show("account");
 }
 async function loadAdmin() {
