@@ -10,7 +10,7 @@ vm.runInNewContext(source, context);
 const { handle, Db } = context.subject;
 function fixture() {
   const rows = new Map();
-  const store = { async *list({prefix}) { const blobs=[...rows.keys()].filter(k=>k.startsWith(prefix)).map(key=>({key})); for(let i=0;i<blobs.length;i+=2) yield {blobs:blobs.slice(i,i+2)}; }, async get(k){return rows.has(k)?structuredClone(rows.get(k)):null},async getWithMetadata(k){const data=await this.get(k);return data?{data,etag:JSON.stringify(data)}:null},async setJSON(k,v,options={}){if(options.onlyIfMatch && JSON.stringify(rows.get(k))!==options.onlyIfMatch)return {modified:false};rows.set(k,structuredClone(v));return {modified:true}},async delete(k){rows.delete(k)} };
+  const store = { async *list({prefix}) { const blobs=[...rows.keys()].filter(k=>k.startsWith(prefix)).map(key=>({key})); for(let i=0;i<blobs.length;i+=2) yield {blobs:blobs.slice(i,i+2)}; }, async get(k){return rows.has(k)?structuredClone(rows.get(k)):null},async getWithMetadata(k){const data=await this.get(k);return data?{data,etag:JSON.stringify(data)}:null},async setJSON(k,v,options={}){if(options.onlyIfNew && rows.has(k))return {modified:false};if(options.onlyIfMatch && JSON.stringify(rows.get(k))!==options.onlyIfMatch)return {modified:false};rows.set(k,structuredClone(v));return {modified:true}},async delete(k){rows.delete(k)} };
   const db = new Db(store);
   const seed = (table,row)=>store.setJSON(`rec:${table}:${row.id}`,row);
   const auth = { authorization:'Bearer test' };
@@ -49,13 +49,29 @@ test('password reset does not claim to send an email',async()=>{
  const f=fixture();const result=await f.call('POST','/api/auth/password-reset',{email:'unknown@example.com'});assert.match(result.obj.message,/No reset email has been sent/);
 });
 
-test('simultaneous claims allow only one partner',async()=>{
+test('different members can support the same request simultaneously',async()=>{
  const f=fixture(); await f.seed('accountability_requests',{id:'r',requester_id:'partner',scheduled_for:'2099-01-01',duration_minutes:30,title:'Test',status:'open'});
  await f.seed('profiles',{id:'third',email:'third@example.com'});
  const tokenHash=crypto.createHash('sha256').update('third').digest('hex');
  await f.seed('sessions',{id:tokenHash,token_hash:tokenHash,user_id:'third',expires_at:'2099-01-01'});
  const outcomes=await Promise.allSettled([f.call('POST','/api/requests/r/claim'),handle(new Db(f.store),'POST','/api/requests/r/claim',{authorization:'Bearer third'},{},'third')]);
- assert.equal(outcomes.filter(x=>x.status==='fulfilled').length,1);
+ assert.equal(outcomes.filter(x=>x.status==='fulfilled').length,2);
+ assert.equal((await new Db(f.store).all('matches')).length,2);
+ assert.equal((await new Db(f.store).all('calendar_events')).length,2);
+ const calendar=await f.call('GET','/api/calendar');assert.equal(calendar.obj.events.length,1);assert.equal(calendar.obj.events[0].supporters.length,2);
+});
+
+test('repeat join by the same member creates only one commitment', async()=>{
+ const f=fixture();await f.seed('accountability_requests',{id:'r',requester_id:'partner',scheduled_for:'2099-01-01',duration_minutes:30,title:'Test',status:'open'});
+ await Promise.all([f.call('POST','/api/requests/r/claim'),handle(new Db(f.store),'POST','/api/requests/r/claim',{authorization:'Bearer test'},{},'test')]);
  assert.equal((await new Db(f.store).all('matches')).length,1);
  assert.equal((await new Db(f.store).all('calendar_events')).length,1);
+});
+test('one supporter leaving keeps other supporters active',async()=>{
+ const f=fixture();await f.seed('accountability_requests',{id:'r',requester_id:'partner',status:'matched'});
+ await f.seed('matches',{id:'m1',request_id:'r',partner_id:'owner',requester_id:'partner',status:'active'});
+ await f.seed('matches',{id:'m2',request_id:'r',partner_id:'third',requester_id:'partner',status:'active'});
+ await f.call('PATCH','/api/matches/m1',{status:'released'});
+ assert.equal((await f.db.get('accountability_requests','r')).status,'matched');
+ assert.equal((await f.db.get('matches','m2')).status,'active');
 });
