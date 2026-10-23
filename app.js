@@ -326,7 +326,7 @@ window.addEventListener("unhandledrejection", e => { e.preventDefault(); showErr
   const fragment = new URLSearchParams(location.hash.slice(1));
   resetToken = fragment.get("reset") || "";
   googleReturn = fragment.get("google") || "";
-  if (googleReturn) history.replaceState(null, "", location.pathname + location.search);
+  if (googleReturn) history.replaceState(null, "", location.pathname);
   if (resetToken) history.replaceState(null, "", location.pathname + location.search);
   wire();
   guardHandlers();
