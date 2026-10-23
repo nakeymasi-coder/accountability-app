@@ -24,8 +24,8 @@
   <button id="btn-signout" class="pill-btn ghost hidden" type="button">Sign out</button>
 </header>
 
-<div id="demo-banner" class="demo-banner hidden" role="note">
-  <strong>Demo Mode</strong> — no live backend is connected, so anything you enter is saved only in this browser on this device and is not shared with the community. Connect the backend (see README) for real accounts and saving.
+<div id="server-banner" class="server-banner hidden" role="alert">
+  <strong>We can't reach the app server right now.</strong> Check your connection and refresh — nothing you enter will be saved until the server is back.
 </div>
 <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
 <div id="global-error" class="error-banner hidden" role="alert"></div>
@@ -96,6 +96,7 @@
       <label>Date &amp; time <input id="req-when" type="datetime-local" required></label>
       <label>How long (minutes) <input id="req-duration" type="number" min="5" max="480" value="30" required></label>
       <label>Where / link (optional) <input id="req-where" type="text" maxlength="300" placeholder="Zoom link, live platform, or place"></label>
+      <label>Link (optional) <input id="req-link" type="url" maxlength="2000" placeholder="https://… — Zoom link, live link, or post link for your partner"></label>
       <label class="hp" aria-hidden="true">Website <input id="req-website" type="text" tabindex="-1" autocomplete="off"></label>
       <p id="request-error" class="field-error hidden"></p>
       <div class="row"><button class="pill-btn primary big" type="submit">Post to the community</button>

@@ -77,6 +77,7 @@ create table public.accountability_requests (
   scheduled_for timestamptz not null,
   duration_minutes integer not null default 30 check (duration_minutes between 5 and 480),
   location_or_link text not null default '',
+  link_url text not null default '', -- optional http/https link the partner should open (Zoom, live, post…)
   status text not null default 'open' check (status in ('open','matched','completed','cancelled')),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),

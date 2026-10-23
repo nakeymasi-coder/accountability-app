@@ -91,6 +91,11 @@ function readBody(req) {
 }
 const clean = (v, max) => String(v ?? "").trim().slice(0, max);
 const validEmail = (e) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e);
+function validHttpUrl(v) {
+  if (!v) return true; // empty is fine — the field is optional
+  try { const u = new URL(v); return u.protocol === "http:" || u.protocol === "https:"; } catch (_) { return false; }
+}
+const LINK_ERROR = "That link doesn't look right — links start with https://";
 function audit(actorId, action, targetType, targetId, details) {
   insert("audit_log", { actor_id: actorId, action, target_type: targetType, target_id: targetId || null, details: details || "" });
 }
@@ -257,7 +262,9 @@ const server = http.createServer(async (req, res) => {
       const duration = Math.max(5, Math.min(480, Number(body.duration_minutes) || 30));
       const dup = store.accountability_requests.find((r) => r.requester_id === me.id && r.title === title && r.scheduled_for === when.toISOString() && r.status !== "cancelled");
       if (dup) return fail(res, 409, "You already posted this exact request for that time — it's in the feed already.");
-      const r = insert("accountability_requests", { requester_id: me.id, title, what_needed: what, partner_duties: duties, scheduled_for: when.toISOString(), duration_minutes: duration, location_or_link: clean(body.location_or_link, 300), status: "open" });
+      const linkUrl = clean(body.link_url, 2000);
+      if (!validHttpUrl(linkUrl)) return fail(res, 400, LINK_ERROR);
+      const r = insert("accountability_requests", { requester_id: me.id, title, what_needed: what, partner_duties: duties, scheduled_for: when.toISOString(), duration_minutes: duration, location_or_link: clean(body.location_or_link, 300), link_url: linkUrl, status: "open" });
       return send(res, 201, { request: r });
     }
     if (seg[1] === "requests" && seg[3] === "claim" && method === "POST") {
@@ -305,12 +312,12 @@ const server = http.createServer(async (req, res) => {
     /* ----- Calendar & commitments ----- */
     if (p === "/api/calendar" && method === "GET") {
       const me = requireAuth(req, res); if (!me) return;
-      const events = store.calendar_events.filter((e) => e.status === "scheduled").sort((a, b) => a.starts_at.localeCompare(b.starts_at)).map((e) => ({ ...e, requester_name: (store.profiles.find((x) => x.id === e.requester_id) || {}).display_name || "Member", partner_name: (store.profiles.find((x) => x.id === e.partner_id) || {}).display_name || "Member" }));
+      const events = store.calendar_events.filter((e) => e.status === "scheduled").sort((a, b) => a.starts_at.localeCompare(b.starts_at)).map((e) => ({ ...e, link_url: (store.accountability_requests.find((x) => x.id === e.request_id) || {}).link_url || "", requester_name: (store.profiles.find((x) => x.id === e.requester_id) || {}).display_name || "Member", partner_name: (store.profiles.find((x) => x.id === e.partner_id) || {}).display_name || "Member" }));
       return send(res, 200, { events });
     }
     if (p === "/api/commitments" && method === "GET") {
       const me = requireAuth(req, res); if (!me) return;
-      const matches = store.matches.filter((m) => m.requester_id === me.id || m.partner_id === me.id).map((m) => { const r = store.accountability_requests.find((x) => x.id === m.request_id) || {}; return { ...m, request_title: r.title || "Request", scheduled_for: r.scheduled_for || "", requester_name: (store.profiles.find((x) => x.id === m.requester_id) || {}).display_name || "Member", partner_name: (store.profiles.find((x) => x.id === m.partner_id) || {}).display_name || "Member" }; });
+      const matches = store.matches.filter((m) => m.requester_id === me.id || m.partner_id === me.id).map((m) => { const r = store.accountability_requests.find((x) => x.id === m.request_id) || {}; return { ...m, request_title: r.title || "Request", scheduled_for: r.scheduled_for || "", link_url: r.link_url || "", requester_name: (store.profiles.find((x) => x.id === m.requester_id) || {}).display_name || "Member", partner_name: (store.profiles.find((x) => x.id === m.partner_id) || {}).display_name || "Member" }; });
       return send(res, 200, { matches });
     }
 

@@ -1,0 +1,14 @@
+# Accountability App — one Netlify deploy: static front end (repo root)
+# + the /api/* backend as a Netlify Function (netlify/functions/api.mjs),
+# with data in Netlify Blobs. No build command — publish the repo root.
+
+[build]
+  publish = "."
+  functions = "netlify/functions"
+
+# Front end calls /api/* — route those to the function, same origin.
+[[redirects]]
+  from = "/api/*"
+  to = "/.netlify/functions/api/:splat"
+  status = 200
+  force = true

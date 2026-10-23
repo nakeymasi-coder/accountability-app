@@ -34,6 +34,7 @@ h2{font-size:1.25rem;margin:14px 0 10px}h3{margin:0 0 10px}
 @keyframes pulseGlow{0%,100%{box-shadow:0 10px 24px rgba(47,127,224,.32)}50%{box-shadow:0 10px 32px rgba(125,180,255,.55)}}
 .pill-btn.ghost{background:rgba(255,255,255,.7)}
 .pill-btn.danger{background:linear-gradient(135deg,#e0566d,#f28ba0);color:#fff;animation:none}
+a.link-pill{text-decoration:none;display:inline-flex;align-items:center}
 .pill-btn.big{width:100%;padding:14px 22px;font-size:1.02rem}
 .pill-btn.tab{flex:1}.pill-btn.tab.active{background:linear-gradient(135deg,var(--sapphire),var(--sapphire-light));color:#fff}
 .tab-row{display:flex;gap:10px;margin-bottom:14px}
@@ -53,7 +54,7 @@ h2{font-size:1.25rem;margin:14px 0 10px}h3{margin:0 0 10px}
 .badge{display:inline-block;background:linear-gradient(135deg,#e7f0fd,#fff);border:1px solid var(--silver);
   border-radius:999px;padding:3px 12px;font-size:.78rem;font-weight:700}
 .badge.open{background:#e4f7ec}.badge.matched{background:#e7f0fd}
-.demo-banner{max-width:760px;margin:8px auto;padding:12px 16px;border-radius:16px;background:#fff7d6;border:1.5px dashed #d9a514;color:#664d03;font-size:.88rem}
+.server-banner{max-width:760px;margin:8px auto;padding:12px 16px;border-radius:16px;background:#fde8ec;border:1.5px dashed #d6455a;color:#8c2436;font-size:.88rem}
 .error-banner,.toast{max-width:760px;margin:8px auto;padding:12px 16px;border-radius:16px;font-weight:600}
 .error-banner{background:#fde8ec;color:#8c2436}.toast{background:#e4f7ec;color:#14532d;position:sticky;top:8px;z-index:5}
 .empty{color:var(--muted);text-align:center;padding:18px}

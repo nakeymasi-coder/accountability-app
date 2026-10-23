@@ -1,14 +1,13 @@
 "use strict";
 /* Accountability App — front end.
    Talks to the backend via fetch() to the /api/* endpoints below.
-   If no backend answers /api/health, it switches to DEMO MODE:
-   data lives in localStorage on this device only and is NOT shared. */
+   The backend is required: if /api/health does not answer, the app
+   shows a "can't reach the server" banner and saves nothing. */
 
 /* ================= CONFIG ================= */
 const CONFIG = {
   API_BASE: "",            // "" = same origin. Set to your backend URL if hosted separately, e.g. "https://api.example.com"
   HEALTH_PATH: "/api/health",
-  DEMO_KEY: "accountability_demo_v1",
   TOKEN_KEY: "accountability_token_v1",
 };
 const OWNER_ADMIN_EMAIL = "nakeymasi@gmail.com"; // display only — the server enforces this
@@ -16,13 +15,26 @@ const OWNER_ADMIN_EMAIL = "nakeymasi@gmail.com"; // display only — the server 
 /* ================= SMALL HELPERS ================= */
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+function linkify(text) {
+  // Escape FIRST (no raw HTML can slip through), then wrap bare http/https
+  // URLs in tappable links. Quotes are already escaped by esc(), so a URL
+  // can never break out of the href.
+  return esc(text).replace(/(https?:\/\/[^\s<]+)/g, (u) => `<a href="${u}" target="_blank" rel="noopener noreferrer">${u}</a>`);
+}
+function linkPill(url) {
+  if (!url) return null;
+  const a = document.createElement("a");
+  a.className = "pill-btn link-pill"; a.href = url; a.target = "_blank"; a.rel = "noopener noreferrer";
+  a.textContent = "🔗 Open link";
+  return a;
+}
 const fmtWhen = (iso) => { const d = new Date(iso); return isNaN(d) ? "" : d.toLocaleString([], { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }); };
 function toast(msg) { const t = $("toast"); t.textContent = msg; t.classList.remove("hidden"); setTimeout(() => t.classList.add("hidden"), 4200); }
 function showError(id, msg) { const e = $(id); if (!e) return; e.textContent = msg || ""; e.classList.toggle("hidden", !msg); }
 function friendly(err) { return (err && err.message) ? err.message : "Something didn't go through. Please check your connection and try again."; }
 
 /* ================= STATE ================= */
-let state = { user: null, demo: false, currentRequestId: null, requests: [], content: [] };
+let state = { user: null, currentRequestId: null, requests: [], content: [] };
 
 /* ================= API LAYER ================= */
 function token() { return localStorage.getItem(CONFIG.TOKEN_KEY) || ""; }
@@ -38,141 +50,7 @@ async function api(path, options = {}) {
   return data;
 }
 
-/* ---- Demo store (localStorage). Seeded EMPTY except default content text. ---- */
-function demoSeed() {
-  return {
-    profiles: [], credentials: [], sessions: [], user_roles: [], invites: [],
-    accountability_requests: [], matches: [], calendar_events: [], messages: [],
-    content_items: [
-      { id: "c-privacy", slug: "privacy-policy", kind: "privacy", title: "Privacy Policy", body: "We store your name, email, accountability requests, replies, and calendar commitments so the app can match you with a partner. We never sell your data. Your account data is kept until you delete your account, or the owner removes it after 24 months inactive. You can export or delete your data any time from the Account tab.", is_published: true, created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
-      { id: "c-welcome", slug: "welcome", kind: "announcement", title: "Welcome", body: "Welcome to our private accountability community. Post what you're showing up for — somebody here will show up with you.", is_published: true, created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
-    ],
-    integration_connections: [
-      { id: "i-zoom", provider: "zoom", status: "not_connected", external_account_label: "", created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
-      { id: "i-gcal", provider: "google_calendar", status: "not_connected", external_account_label: "", created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
-      { id: "i-email", provider: "email", status: "not_connected", external_account_label: "", created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
-    ],
-    audit_log: [], data_requests: [], rate_limits: [],
-  };
-}
-function demoLoad() { try { return JSON.parse(localStorage.getItem(CONFIG.DEMO_KEY)) || demoSeed(); } catch (_) { return demoSeed(); } }
-function demoSave(db) { localStorage.setItem(CONFIG.DEMO_KEY, JSON.stringify(db)); }
-const uid = () => "id-" + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
-const nowISO = () => new Date().toISOString();
-// Demo passwords: simple non-secure hash — DEMO ONLY, the real backend uses scrypt.
-const demoHash = (pw) => { let h = 0; for (let i = 0; i < pw.length; i++) h = (h * 31 + pw.charCodeAt(i)) | 0; return "demo$" + h; };
-
-function demoUser(db, id) { const p = db.profiles.find((x) => x.id === id); if (!p) return null; const roles = db.user_roles.filter((r) => r.user_id === id).map((r) => r.role); return { ...p, roles }; }
-function demoRequireUser(db) { const t = token(); const s = db.sessions.find((x) => x.id === t); if (!s) throw new Error("Please sign in to continue."); return demoUser(db, s.user_id); }
-
-/* Demo implementation of the exact same /api/* contract. */
-async function demoApi(path, options = {}) {
-  const db = demoLoad(); const method = options.method || "GET"; const body = options.body || {};
-  const seg = path.split("/").filter(Boolean); // ["api", ...]
-  const done = (out) => { demoSave(db); return out; };
-  const need = (cond, msg) => { if (!cond) throw new Error(msg); };
-
-  if (path === "/api/auth/signup") {
-    need(!body.website, "That signup couldn't be accepted."); // honeypot
-    need(body.consent, "Please agree to the Privacy Policy so we can store your requests and match you.");
-    need(body.name && body.email && body.password && body.password.length >= 8, "Please fill in your name, a valid email, and a password of at least 8 characters.");
-    const email = String(body.email).trim().toLowerCase();
-    need(!db.profiles.some((p) => p.email === email), "An account with that email already exists. Try signing in instead.");
-    const isOwner = email === OWNER_ADMIN_EMAIL;
-    if (!isOwner) {
-      const inv = db.invites.find((i) => i.code === String(body.inviteCode || "").trim().toUpperCase() && i.is_active && (!i.expires_at || new Date(i.expires_at) > new Date()) && i.use_count < i.max_uses);
-      need(inv, "That invite code didn't work. This community is invite-only — check the code or ask the owner for a fresh one.");
-      inv.use_count += 1; inv.used_by = inv.used_by || null; inv.updated_at = nowISO();
-      if (inv.use_count >= inv.max_uses) inv.is_active = false;
-      var usedInvite = inv;
-    }
-    const user = { id: uid(), email, display_name: String(body.name).trim(), consent_accepted_at: nowISO(), marketing_email_opt_in: !!body.marketingOptIn, created_at: nowISO(), updated_at: nowISO() };
-    db.profiles.push(user);
-    if (typeof usedInvite !== "undefined" && usedInvite) usedInvite.used_by = user.id;
-    db.credentials.push({ id: uid(), user_id: user.id, password_hash: demoHash(body.password), password_salt: "", password_reset_code_hash: "", password_reset_expires_at: null, created_at: nowISO(), updated_at: nowISO() });
-    db.user_roles.push({ id: uid(), user_id: user.id, role: "member", created_at: nowISO(), updated_at: nowISO() });
-    if (isOwner) db.user_roles.push({ id: uid(), user_id: user.id, role: "admin", created_at: nowISO(), updated_at: nowISO() });
-    const sess = { id: uid(), user_id: user.id, token_hash: "", expires_at: null, created_at: nowISO(), updated_at: nowISO() };
-    db.sessions.push(sess); localStorage.setItem(CONFIG.TOKEN_KEY, sess.id);
-    return done({ user: demoUser(db, user.id) });
-  }
-  if (path === "/api/auth/signin") {
-    const email = String(body.email || "").trim().toLowerCase();
-    const p = db.profiles.find((x) => x.email === email);
-    const c = p && db.credentials.find((x) => x.user_id === p.id);
-    need(p && c && c.password_hash === demoHash(String(body.password || "")), "That email and password don't match. Check them and try again.");
-    const sess = { id: uid(), user_id: p.id, token_hash: "", expires_at: null, created_at: nowISO(), updated_at: nowISO() };
-    db.sessions.push(sess); localStorage.setItem(CONFIG.TOKEN_KEY, sess.id);
-    return done({ user: demoUser(db, p.id) });
-  }
-  if (path === "/api/auth/signout") { const t = token(); db.sessions = db.sessions.filter((s) => s.id !== t); localStorage.removeItem(CONFIG.TOKEN_KEY); return done({ ok: true }); }
-  if (path === "/api/auth/password-reset") { return { ok: true, message: "If an account exists for that email, a reset is on its way. Codes are never shown in the app." }; }
-  if (path === "/api/me" && method === "GET") return { user: demoRequireUser(db) };
-  if (path === "/api/me" && method === "PATCH") { const u = demoRequireUser(db); const p = db.profiles.find((x) => x.id === u.id); if (typeof body.marketingOptIn === "boolean") { p.marketing_email_opt_in = body.marketingOptIn; p.updated_at = nowISO(); } return done({ user: demoUser(db, p.id) }); }
-  if (path === "/api/requests" && method === "GET") {
-    demoRequireUser(db);
-    return { requests: db.accountability_requests.slice().sort((a, b) => a.scheduled_for.localeCompare(b.scheduled_for)).map((r) => ({ ...r, requester_name: (db.profiles.find((p) => p.id === r.requester_id) || {}).display_name || "Member", message_count: db.messages.filter((m) => m.request_id === r.id).length })) };
-  }
-  if (path === "/api/requests" && method === "POST") {
-    const u = demoRequireUser(db); need(!body.website, "That post couldn't be accepted.");
-    need(body.title && body.what_needed && body.partner_duties && body.scheduled_for, "Please fill in the title, what you need accountability for, what your partner should do, and the date and time.");
-    const dup = db.accountability_requests.find((r) => r.requester_id === u.id && r.title === body.title && r.scheduled_for === body.scheduled_for && r.status !== "cancelled");
-    need(!dup, "You already posted this exact request for that time — it's in the feed already.");
-    const r = { id: uid(), requester_id: u.id, title: String(body.title).trim(), what_needed: String(body.what_needed).trim(), partner_duties: String(body.partner_duties).trim(), scheduled_for: body.scheduled_for, duration_minutes: Math.max(5, Math.min(480, Number(body.duration_minutes) || 30)), location_or_link: String(body.location_or_link || "").trim(), status: "open", created_at: nowISO(), updated_at: nowISO() };
-    db.accountability_requests.push(r); return done({ request: r });
-  }
-  if (seg[1] === "requests" && seg[3] === "claim") {
-    const u = demoRequireUser(db); const r = db.accountability_requests.find((x) => x.id === seg[2]);
-    need(r, "That request isn't here anymore."); need(r.requester_id !== u.id, "You can't claim your own request — a partner has to claim it."); need(r.status === "open", "This request was already claimed.");
-    const start = new Date(r.scheduled_for); const end = new Date(start.getTime() + r.duration_minutes * 60000);
-    const m = { id: uid(), request_id: r.id, requester_id: r.requester_id, partner_id: u.id, status: "active", completed_at: null, notes: "", created_at: nowISO(), updated_at: nowISO() };
-    db.matches.push(m); r.status = "matched"; r.updated_at = nowISO();
-    db.calendar_events.push({ id: uid(), request_id: r.id, match_id: m.id, title: r.title, starts_at: start.toISOString(), ends_at: end.toISOString(), requester_id: r.requester_id, partner_id: u.id, status: "scheduled", created_at: nowISO(), updated_at: nowISO() });
-    return done({ match: m });
-  }
-  if (seg[1] === "requests" && seg[3] === "messages" && method === "GET") { demoRequireUser(db); return { messages: db.messages.filter((m) => m.request_id === seg[2]).map((m) => ({ ...m, sender_name: (db.profiles.find((p) => p.id === m.sender_id) || {}).display_name || "Member" })) }; }
-  if (seg[1] === "requests" && seg[3] === "messages" && method === "POST") {
-    const u = demoRequireUser(db); need(body.body && String(body.body).trim(), "Write a reply first.");
-    const m = { id: uid(), request_id: seg[2], sender_id: u.id, body: String(body.body).trim(), created_at: nowISO(), updated_at: nowISO() };
-    db.messages.push(m); return done({ message: m });
-  }
-  if (seg[1] === "matches" && method === "PATCH") {
-    const u = demoRequireUser(db); const m = db.matches.find((x) => x.id === seg[2]);
-    need(m && (m.partner_id === u.id || m.requester_id === u.id), "That commitment isn't yours to change.");
-    need(["completed", "released", "no_show"].includes(body.status), "Pick completed, released, or no-show.");
-    m.status = body.status; m.completed_at = body.status === "completed" ? nowISO() : null; m.updated_at = nowISO();
-    const r = db.accountability_requests.find((x) => x.id === m.request_id); if (r && body.status === "released") { r.status = "open"; r.updated_at = nowISO(); }
-    const ev = db.calendar_events.find((x) => x.match_id === m.id); if (ev) { ev.status = body.status === "released" ? "cancelled" : body.status; ev.updated_at = nowISO(); }
-    return done({ match: m });
-  }
-  if (path === "/api/calendar") { demoRequireUser(db); return { events: db.calendar_events.filter((e) => e.status === "scheduled").sort((a, b) => a.starts_at.localeCompare(b.starts_at)).map((e) => ({ ...e, requester_name: (db.profiles.find((p) => p.id === e.requester_id) || {}).display_name || "Member", partner_name: (db.profiles.find((p) => p.id === e.partner_id) || {}).display_name || "Member" })) }; }
-  if (path === "/api/commitments") { const u = demoRequireUser(db); return { matches: db.matches.filter((m) => m.requester_id === u.id || m.partner_id === u.id).map((m) => ({ ...m, request_title: (db.accountability_requests.find((r) => r.id === m.request_id) || {}).title || "Request", scheduled_for: (db.accountability_requests.find((r) => r.id === m.request_id) || {}).scheduled_for || "", requester_name: (db.profiles.find((p) => p.id === m.requester_id) || {}).display_name || "Member", partner_name: (db.profiles.find((p) => p.id === m.partner_id) || {}).display_name || "Member" })) }; }
-  if (path === "/api/content") return { content: db.content_items.filter((c) => c.is_published) };
-  if (path === "/api/account/export") { const u = demoRequireUser(db); db.data_requests.push({ id: uid(), user_id: u.id, kind: "export", status: "completed", completed_at: nowISO(), created_at: nowISO(), updated_at: nowISO() }); return done({ export: { profile: u, requests: db.accountability_requests.filter((r) => r.requester_id === u.id), matches: db.matches.filter((m) => m.requester_id === u.id || m.partner_id === u.id), messages: db.messages.filter((m) => m.sender_id === u.id) } }); }
-  if (path === "/api/account" && method === "DELETE") {
-    const u = demoRequireUser(db);
-    db.messages = db.messages.filter((m) => m.sender_id !== u.id);
-    db.calendar_events = db.calendar_events.filter((e) => e.requester_id !== u.id && e.partner_id !== u.id);
-    db.matches = db.matches.filter((m) => m.requester_id !== u.id && m.partner_id !== u.id);
-    db.accountability_requests = db.accountability_requests.filter((r) => r.requester_id !== u.id);
-    db.sessions = db.sessions.filter((s) => s.user_id !== u.id); db.credentials = db.credentials.filter((c) => c.user_id !== u.id);
-    db.user_roles = db.user_roles.filter((r) => r.user_id !== u.id); db.profiles = db.profiles.filter((p) => p.id !== u.id);
-    localStorage.removeItem(CONFIG.TOKEN_KEY); return done({ ok: true });
-  }
-  if (seg[1] === "admin") {
-    const u = demoRequireUser(db); need(u.email === OWNER_ADMIN_EMAIL && u.roles.includes("admin"), "Admin is locked to the owner account only.");
-    if (path === "/api/admin/overview") return { overview: { memberCount: db.profiles.length, openRequests: db.accountability_requests.filter((r) => r.status === "open").length, activeMatches: db.matches.filter((m) => m.status === "active").length, adminCount: 1 } };
-    if (path === "/api/admin/members") return { members: db.profiles.map((p) => demoUser(db, p.id)) };
-    if (path === "/api/admin/invites" && method === "GET") return { invites: db.invites };
-    if (path === "/api/admin/invites" && method === "POST") { const inv = { id: uid(), code: Math.random().toString(36).slice(2, 8).toUpperCase(), created_by: u.id, used_by: null, max_uses: 1, use_count: 0, expires_at: null, is_active: true, created_at: nowISO(), updated_at: nowISO() }; db.invites.push(inv); db.audit_log.push({ id: uid(), actor_id: u.id, action: "invite_created", target_type: "invite", target_id: inv.id, details: inv.code, created_at: nowISO(), updated_at: nowISO() }); return done({ invite: inv }); }
-    if (path === "/api/admin/content" && method === "GET") return { content: db.content_items };
-    if (seg[2] === "content" && method === "PUT") { const c = db.content_items.find((x) => x.id === seg[3]); need(c, "That content isn't here."); c.title = String(body.title || c.title); c.body = String(body.body || c.body); c.is_published = body.is_published !== false; c.updated_at = nowISO(); db.audit_log.push({ id: uid(), actor_id: u.id, action: "content_updated", target_type: "content_item", target_id: c.id, details: c.slug, created_at: nowISO(), updated_at: nowISO() }); return done({ content: c }); }
-    if (path === "/api/admin/integrations") return { integrations: db.integration_connections };
-    if (path === "/api/admin/audit") return { audit: db.audit_log.slice().reverse() };
-  }
-  throw new Error("That action isn't available right now.");
-}
-async function call(path, options) { return state.demo ? demoApi(path, options) : api(path, options); }
+async function call(path, options) { return api(path, options); }
 
 /* ================= SCREENS ================= */
 const SCREENS = ["auth", "feed", "new-request", "request-detail", "calendar", "commitments", "account", "admin"];
@@ -200,6 +78,7 @@ function requestCard(r, mine) {
   const row = document.createElement("div"); row.className = "row";
   const open = document.createElement("button"); open.className = "pill-btn"; open.textContent = "Open & reply"; open.onclick = () => openRequest(r.id); row.appendChild(open);
   if (!mine && r.status === "open") { const c = document.createElement("button"); c.className = "pill-btn primary"; c.textContent = "I'm available — Claim"; c.onclick = () => claimRequest(r.id); row.appendChild(c); }
+  const lp = linkPill(r.link_url); if (lp) row.appendChild(lp);
   el.appendChild(row); return el;
 }
 async function loadFeed() {
@@ -220,12 +99,13 @@ async function openRequest(id) {
     const b = document.createElement("button"); b.className = "pill-btn primary big"; b.textContent = "I'm available — Claim this request";
     b.onclick = () => claimRequest(id); $("detail-card").appendChild(b);
   }
+  const dlp = linkPill(r.link_url); if (dlp) { dlp.classList.add("big"); $("detail-card").appendChild(dlp); }
   await loadMessages(); show("request-detail");
 }
 async function loadMessages() {
   const data = await call(`/api/requests/${state.currentRequestId}/messages`);
   const list = $("message-list"); list.innerHTML = "";
-  data.messages.forEach((m) => { const d = document.createElement("div"); d.className = "card3d"; d.style.margin = "0"; d.innerHTML = `<p><strong>${esc(m.sender_name || "Member")}</strong> <span class="muted small">${esc(fmtWhen(m.created_at))}</span></p><p>${esc(m.body)}</p>`; list.appendChild(d); });
+  data.messages.forEach((m) => { const d = document.createElement("div"); d.className = "card3d"; d.style.margin = "0"; d.innerHTML = `<p><strong>${esc(m.sender_name || "Member")}</strong> <span class="muted small">${esc(fmtWhen(m.created_at))}</span></p><p>${linkify(m.body)}</p>`; list.appendChild(d); });
   $("messages-empty").classList.toggle("hidden", data.messages.length > 0);
 }
 async function claimRequest(id) {
@@ -234,7 +114,7 @@ async function claimRequest(id) {
 }
 async function loadCalendar() {
   const data = await call("/api/calendar"); const list = $("calendar-list"); list.innerHTML = "";
-  data.events.forEach((e) => { const d = document.createElement("div"); d.className = "card3d"; d.innerHTML = `<h3>${esc(e.title)}</h3><p class="meta">${esc(fmtWhen(e.starts_at))} – ${esc(fmtWhen(e.ends_at))}</p><p>${esc(e.requester_name)} + accountability partner ${esc(e.partner_name)}</p>`; list.appendChild(d); });
+  data.events.forEach((e) => { const d = document.createElement("div"); d.className = "card3d"; d.innerHTML = `<h3>${esc(e.title)}</h3><p class="meta">${esc(fmtWhen(e.starts_at))} – ${esc(fmtWhen(e.ends_at))}</p><p>${esc(e.requester_name)} + accountability partner ${esc(e.partner_name)}</p>`; const lp = linkPill(e.link_url); if (lp) d.appendChild(lp); list.appendChild(d); });
   $("calendar-empty").classList.toggle("hidden", data.events.length > 0); show("calendar");
 }
 async function loadCommitments() {
@@ -245,6 +125,7 @@ async function loadCommitments() {
     if (m.status === "active") { const row = document.createElement("div"); row.className = "row";
       [["completed", "Mark completed"], ["released", "Release"], ["no_show", "No-show"]].forEach(([st, label]) => { const b = document.createElement("button"); b.className = "pill-btn"; b.textContent = label; b.onclick = async () => { try { await call(`/api/matches/${m.id}`, { method: "PATCH", body: { status: st } }); toast("Updated."); loadCommitments(); } catch (e) { toast(friendly(e)); } }; row.appendChild(b); });
       d.appendChild(row); }
+    const lp = linkPill(m.link_url); if (lp) d.appendChild(lp);
     list.appendChild(d);
   });
   $("commitments-empty").classList.toggle("hidden", data.matches.length > 0); show("commitments");
@@ -306,7 +187,7 @@ function wire() {
   $("btn-cancel-request").onclick = () => loadFeed();
   $("btn-back-feed").onclick = () => loadFeed();
   $("request-form").onsubmit = async (e) => { e.preventDefault(); showError("request-error", "");
-    try { await call("/api/requests", { method: "POST", body: { title: $("req-title").value, what_needed: $("req-what").value, partner_duties: $("req-duties").value, scheduled_for: new Date($("req-when").value).toISOString(), duration_minutes: Number($("req-duration").value), location_or_link: $("req-where").value, website: $("req-website").value } }); e.target.reset(); toast("Posted to the community feed."); loadFeed(); }
+    try { await call("/api/requests", { method: "POST", body: { title: $("req-title").value, what_needed: $("req-what").value, partner_duties: $("req-duties").value, scheduled_for: new Date($("req-when").value).toISOString(), duration_minutes: Number($("req-duration").value), location_or_link: $("req-where").value, link_url: $("req-link").value, website: $("req-website").value } }); e.target.reset(); toast("Posted to the community feed."); loadFeed(); }
     catch (err) { showError("request-error", friendly(err)); } };
   $("message-form").onsubmit = async (e) => { e.preventDefault(); showError("message-error", "");
     try { await call(`/api/requests/${state.currentRequestId}/messages`, { method: "POST", body: { body: $("message-body").value } }); $("message-body").value = ""; await loadMessages(); const d = await call("/api/requests"); state.requests = d.requests; }
@@ -321,14 +202,17 @@ function wire() {
 /* ================= BOOT ================= */
 (async function init() {
   wire();
-  // Decide live vs demo: probe the backend health endpoint briefly.
+  // The backend is required — probe its health endpoint briefly.
+  // If it does not answer, show the server banner and save nothing.
+  let serverUp = false;
   try {
     const ctrl = new AbortController(); const t = setTimeout(() => ctrl.abort(), 2500);
     const res = await fetch(CONFIG.API_BASE + CONFIG.HEALTH_PATH, { signal: ctrl.signal }); clearTimeout(t);
     if (!res.ok) throw new Error("no backend");
-    state.demo = false;
-  } catch (_) { state.demo = true; }
-  $("demo-banner").classList.toggle("hidden", !state.demo);
+    serverUp = true;
+  } catch (_) { serverUp = false; }
+  $("server-banner").classList.toggle("hidden", serverUp);
+  if (!serverUp) { setSignedInUI(); return; }
   await refreshContent();
   if (token()) {
     try { const d = await call("/api/me"); state.user = d.user; setSignedInUI(); loadFeed(); return; }

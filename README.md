@@ -10,12 +10,15 @@ Invite-only accountability app for a private community (creators, entrepreneurs,
 |---|---|
 | `index.html` / `styles.css` / `app.js` | Mobile-first single-page front end (sapphire / chrome silver / pearl white, animated pill buttons, soft 3D cards). Add-to-home-screen ready via `manifest.webmanifest` + `icon.svg`. |
 | `server/server.js` | Complete backend. Node **built-in http only — zero npm dependencies.** JSON file store, scrypt password hashing, sessions, rate limits, audit log. |
+| `netlify/functions/api.mjs` | The same complete backend as a **Netlify Function** — the recommended live deploy. Implements the whole `/api/*` contract; data lives in **Netlify Blobs**, one blob per record (`rec:<table>:<id>`) so concurrent writes never clobber each other. |
+| `netlify.toml` | Netlify config: publishes the repo root as the site, deploys the functions, and rewrites `/api/*` to the function so front end and backend share one origin. |
+| `package.json` | Project manifest. One dependency only: `@netlify/blobs` (used by the Netlify function). |
 | `supabase/schema.sql` | Production database blueprint (Postgres/Supabase): every table, every field, foreign keys, `created_at`/`updated_at` on every table, and row-level security policies written out. Matches the Node backend's tables 1:1. |
 | `server/data/` | Runtime JSON store (one file per table, created automatically). Git-ignored except `.gitkeep`. |
 
-## Honest note about GitHub
+## One live app — front end and backend together
 
-GitHub **stores this code**, and GitHub Pages can serve the **front end** — in **Demo Mode**. Demo Mode is labeled in the app itself: with no backend connected, data is saved only in that browser (localStorage), seeded empty, and is **not shared** with the community. **Real member data only saves when the backend is hosted** (any Node host) — and for production, when the database from `supabase/schema.sql` is used. A static page alone cannot hold private community accounts.
+The front end must be served **together with a backend**. Deployed on Netlify (below), the static pages and the `/api/*` function are one site on one origin, and everything saves to Netlify Blobs. Run locally, `node server/server.js` serves both. If the page is opened with **no backend answering**, it shows a "We can't reach the app server right now" message and **saves nothing** — there is no offline or local-data mode, on purpose: a private community's accounts and commitments must live on the server, never in one visitor's browser.
 
 ## Run it locally
 
@@ -26,13 +29,23 @@ node server/server.js
 
 No install step. Requires Node 18+. Open the URL, sign up — the owner email above needs no invite code; every other account needs an invite code the owner creates in **Admin → Invite codes**.
 
-Front-end-only preview: open `index.html` from any static host (e.g. GitHub Pages). It probes `/api/health`; when nothing answers, it switches to labeled Demo Mode automatically.
-
 ## Deploy
 
-1. **Front end:** GitHub Pages (Settings → Pages → deploy from `main`, root) — serves the app in Demo Mode, **or** skip Pages and let the Node server serve it (it already does).
-2. **Backend:** run `server/server.js` on any Node host (a small VPS, Render, Railway, Fly.io, etc.). If the front end lives on a different origin, set `API_BASE` at the top of `app.js`.
-3. **Production database:** run `supabase/schema.sql` in Supabase (SQL Editor) to create all tables + RLS, then point your production backend at it. The JSON store in `server/` is the simple self-hosted option and mirrors the same tables/fields.
+### Deploy on Netlify (recommended — front end + backend together)
+
+1. Push this repo to GitHub, then in Netlify choose **Add new site → Import an existing project** and pick this repository.
+2. Build settings: **no build command**; **publish directory = the repo root** (`.`). `netlify.toml` in the repo already carries these settings, so Netlify picks them up automatically.
+3. Deploy. Netlify serves the front end from the root and deploys `netlify/functions/api.mjs` as the `/api/*` backend in the **same site** — one live, connected app. The function creates its Netlify Blobs store (`accountability`) on first use; member data lives there, one blob per record.
+4. Sign up in the live app with the owner email (**nakeymasi@gmail.com**) — it needs no invite code and is the only account that can ever be admin. Create invite codes for everyone else in **Admin → Invite codes**.
+5. Optional environment variables (Site settings → Environment variables — names only, values stay in Netlify): `ZOOM_ACCOUNT_ID`, `GOOGLE_CALENDAR_ID`, `EMAIL_FROM` mark those integrations "connected" in Admin. Secrets are never in this repo.
+
+### Self-host alternative
+
+Run `node server/server.js` on any Node host (a small VPS, Render, Railway, Fly.io, etc.) — it serves the front end AND the backend, storing data as JSON files in `server/data/`. If the front end is ever hosted on a different origin than the backend, set `API_BASE` at the top of `app.js`.
+
+### Production database option
+
+Run `supabase/schema.sql` in Supabase (SQL Editor) to create all tables + RLS as the production database blueprint. It mirrors the same tables/fields the two backends use.
 
 ## Data — every field that is stored
 
@@ -56,7 +69,7 @@ Nothing beyond this list is collected. Every table also has **`created_at`** and
 `id`, `code`, `created_by` → profiles, `used_by` → profiles (nullable), `max_uses`, `use_count`, `expires_at` (nullable), `is_active`
 
 ### `accountability_requests`
-`id`, `requester_id` → profiles, `title`, `what_needed` (what they need accountability for), `partner_duties` (what the partner should do), `scheduled_for`, `duration_minutes`, `location_or_link`, `status` (`open` | `matched` | `completed` | `cancelled`)
+`id`, `requester_id` → profiles, `title`, `what_needed` (what they need accountability for), `partner_duties` (what the partner should do), `scheduled_for`, `duration_minutes`, `location_or_link`, `link_url` (optional http/https link the partner should open — Zoom, live, or post link; validated on the server), `status` (`open` | `matched` | `completed` | `cancelled`)
 
 ### `matches`
 `id`, `request_id` → accountability_requests, `requester_id` → profiles, `partner_id` → profiles, `status` (`active` | `completed` | `released` | `no_show`), `completed_at` (nullable), `notes`
@@ -117,7 +130,7 @@ Row-level rules in `supabase/schema.sql` say the same thing in SQL: RLS is enabl
 - No payments, no card numbers, no health data, nothing sensitive is collected by design.
 - These are technical safeguards only; this README does not claim legal compliance with any law.
 
-## Environment variables (names only — set real values on your host, never in the repo)
+## Environment variables (names only — set real values on your host / in Netlify, never in the repo)
 
 | Name | Used for |
 |---|---|
