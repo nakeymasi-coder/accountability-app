@@ -176,3 +176,14 @@ test('Google callback encrypts tokens, rejects replay and syncs only the member 
   const result=await syncMemberCalendar(f.db,'owner');assert.equal(result.updated,1);assert.equal(calls.filter(x=>x.url.includes('/events/')).length,1);assert.equal(calls.some(x=>String(x.options.body||'').includes('Other private request')),false);
  } finally {global.fetch=oldFetch;if(oldId===undefined)delete process.env.GOOGLE_CLIENT_ID;else process.env.GOOGLE_CLIENT_ID=oldId;if(oldSecret===undefined)delete process.env.GOOGLE_CLIENT_SECRET;else process.env.GOOGLE_CLIENT_SECRET=oldSecret;}
 });
+
+test('reusable invite allows multiple separate member accounts and remains active',async()=>{
+ const f=fixture();await f.seed('invites',{id:'shared',code:'COMMUNITY',max_uses:null,use_count:0,is_active:true,expires_at:null});
+ for(let n=0;n<3;n++) {const result=await f.call('POST','/api/auth/signup',{name:'Member '+n,email:`new${n}@example.com`,password:'Password123!',consent:true,inviteCode:'community'});assert.equal(result.status,201);}
+ const invite=await f.db.get('invites','shared');assert.equal(invite.use_count,3);assert.equal(invite.is_active,true);
+});
+test('owner can upgrade existing code; new codes are reusable; disabled codes stay disabled',async()=>{
+ const f=fixture();await f.seed('user_roles',{id:'owner-admin',user_id:'owner',role:'admin'});await f.seed('invites',{id:'existing',code:'OLD',max_uses:1,use_count:1,is_active:false});await f.seed('invites',{id:'disabled',code:'OFF',max_uses:1,use_count:0,is_active:false});
+ await f.call('POST','/api/admin/invites/reuse');assert.equal((await f.db.get('invites','existing')).max_uses,null);assert.equal((await f.db.get('invites','existing')).is_active,true);assert.equal((await f.db.get('invites','disabled')).is_active,false);
+ assert.equal((await f.call('POST','/api/admin/invites')).obj.invite.max_uses,null);
+});
