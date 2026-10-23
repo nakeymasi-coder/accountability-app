@@ -95,6 +95,12 @@ function validHttpUrl(v) {
   if (!v) return true; // empty is fine — the field is optional
   try { const u = new URL(v); return u.protocol === "http:" || u.protocol === "https:"; } catch (_) { return false; }
 }
+/* Forgiving link handling: a member typing "zoom.us" gets "https://zoom.us",
+   not a rejected post. Only genuinely unparseable links fail validHttpUrl. */
+function normalizeLinkUrl(v) {
+  if (!v) return v;
+  return /^https?:\/\//i.test(v) ? v : "https://" + v;
+}
 const LINK_ERROR = "That link doesn't look right — links start with https://";
 function audit(actorId, action, targetType, targetId, details) {
   insert("audit_log", { actor_id: actorId, action, target_type: targetType, target_id: targetId || null, details: details || "" });
@@ -262,7 +268,7 @@ const server = http.createServer(async (req, res) => {
       const duration = Math.max(5, Math.min(480, Number(body.duration_minutes) || 30));
       const dup = store.accountability_requests.find((r) => r.requester_id === me.id && r.title === title && r.scheduled_for === when.toISOString() && r.status !== "cancelled");
       if (dup) return fail(res, 409, "You already posted this exact request for that time — it's in the feed already.");
-      const linkUrl = clean(body.link_url, 2000);
+      const linkUrl = normalizeLinkUrl(clean(body.link_url, 2000));
       if (!validHttpUrl(linkUrl)) return fail(res, 400, LINK_ERROR);
       const r = insert("accountability_requests", { requester_id: me.id, title, what_needed: what, partner_duties: duties, scheduled_for: when.toISOString(), duration_minutes: duration, location_or_link: clean(body.location_or_link, 300), link_url: linkUrl, status: "open" });
       return send(res, 201, { request: r });

@@ -38,13 +38,15 @@ class Db {
   }
   async all(table) {
     if (this.cache.has(table)) return this.cache.get(table);
-    const rows = [];
+    let rows = [];
     try {
-      const { blobs } = await this.store.list({ prefix: `rec:${table}:` });
-      for (const b of blobs || []) {
-        const row = await this.store.get(b.key, { type: "json" });
-        if (row) rows.push(row);
-      }
+      // Strong consistency: default Blobs reads lag writes by ~10–60s, which
+      // made fresh sign-ups, sessions and posts look like they never saved.
+      const { blobs } = await this.store.list({ prefix: `rec:${table}:`, consistency: "strong" });
+      const fetched = await Promise.all((blobs || []).map((b) =>
+        this.store.get(b.key, { type: "json", consistency: "strong" }).catch(() => null)
+      ));
+      rows = fetched.filter(Boolean);
     } catch (_) { /* empty store behaves as an empty table */ }
     this.cache.set(table, rows);
     return rows;
@@ -52,6 +54,14 @@ class Db {
   async get(table, id) {
     const rows = await this.all(table);
     return rows.find((r) => r.id === id) || null;
+  }
+  /* Direct strong-consistency read of one known key — bypasses list(), whose
+     lag is what made brand-new sessions invisible to requireAuth. */
+  async getDirect(table, id) {
+    try {
+      const row = await this.store.get(keyFor(table, id), { type: "json", consistency: "strong" });
+      return row || null;
+    } catch (_) { return null; }
   }
   async put(table, row) {
     await this.store.setJSON(keyFor(table, row.id), row);
@@ -62,6 +72,14 @@ class Db {
   }
   async insert(table, fields) {
     const row = { id: crypto.randomUUID(), ...fields, created_at: now(), updated_at: now() };
+    await this.put(table, row);
+    return row;
+  }
+  /* Insert a row whose id is chosen by the caller (sessions use their token
+     hash as id, so auth can fetch them by direct key instead of list()). */
+  async insertWithId(table, fieldsWithId) {
+    const row = { ...fieldsWithId, created_at: now(), updated_at: now() };
+    if (!row.id) throw new Error("insertWithId requires an id");
     await this.put(table, row);
     return row;
   }
@@ -173,8 +191,16 @@ async function rateLimited(db, ip, route) {
 async function requireAuth(db, headers) {
   const token = (headers.authorization || "").startsWith("Bearer ") ? headers.authorization.slice(7) : "";
   if (!token) failWith(401, FRIENDLY.auth);
-  const session = (await db.all("sessions")).find((s) => s.token_hash === hashToken(token) && new Date(s.expires_at) > new Date());
-  if (!session) failWith(401, FRIENDLY.auth);
+  const tokenHash = hashToken(token);
+  // New sessions store their token hash as the row id, so try a direct
+  // strong-consistency key read first (immune to list() lag). Fall back to
+  // the list search for legacy sessions created before that change.
+  let session = await db.getDirect("sessions", tokenHash);
+  if (session && session.token_hash !== tokenHash) session = null;
+  if (!session) {
+    session = (await db.all("sessions")).find((s) => s.token_hash === tokenHash) || null;
+  }
+  if (!session || new Date(session.expires_at) <= new Date()) failWith(401, FRIENDLY.auth);
   const profile = await db.get("profiles", session.user_id);
   if (!profile) failWith(401, FRIENDLY.auth);
   return { profile, token };
@@ -195,6 +221,12 @@ function validHttpUrl(v) {
     const u = new URL(v);
     return u.protocol === "http:" || u.protocol === "https:";
   } catch (_) { return false; }
+}
+/* Forgiving link handling: a member typing "zoom.us" gets "https://zoom.us",
+   not a rejected post. Only genuinely unparseable links fail validHttpUrl. */
+function normalizeLinkUrl(v) {
+  if (!v) return v;
+  return /^https?:\/\//i.test(v) ? v : "https://" + v;
 }
 const LINK_ERROR = "That link doesn't look right — links start with https://";
 
@@ -235,7 +267,8 @@ async function handle(db, method, rawPath, headers, body, ip) {
       await db.update("invites", invite);
     }
     const token = crypto.randomBytes(32).toString("hex");
-    await db.insert("sessions", { user_id: profile.id, token_hash: hashToken(token), expires_at: new Date(Date.now() + SESSION_TTL_MS).toISOString() });
+    const tokenHash = hashToken(token);
+    await db.insertWithId("sessions", { id: tokenHash, user_id: profile.id, token_hash: tokenHash, expires_at: new Date(Date.now() + SESSION_TTL_MS).toISOString() });
     return { status: 201, obj: { user: await publicUser(db, profile), token } };
   }
   if (p === "/api/auth/signin" && method === "POST") {
@@ -248,7 +281,8 @@ async function handle(db, method, rawPath, headers, body, ip) {
     }
     await enforceOwnerAdmin(db, profile);
     const token = crypto.randomBytes(32).toString("hex");
-    await db.insert("sessions", { user_id: profile.id, token_hash: hashToken(token), expires_at: new Date(Date.now() + SESSION_TTL_MS).toISOString() });
+    const tokenHash = hashToken(token);
+    await db.insertWithId("sessions", { id: tokenHash, user_id: profile.id, token_hash: tokenHash, expires_at: new Date(Date.now() + SESSION_TTL_MS).toISOString() });
     return { status: 200, obj: { user: await publicUser(db, profile), token } };
   }
   if (p === "/api/auth/signout" && method === "POST") {
@@ -313,7 +347,7 @@ async function handle(db, method, rawPath, headers, body, ip) {
     const title = clean(body.title, 120), what = clean(body.what_needed, 1000), duties = clean(body.partner_duties, 1000);
     const when = new Date(body.scheduled_for);
     if (!title || !what || !duties || isNaN(when)) failWith(400, "Please fill in the title, what you need accountability for, what your partner should do, and a valid date and time.");
-    const linkUrl = clean(body.link_url, 2000);
+    const linkUrl = normalizeLinkUrl(clean(body.link_url, 2000));
     if (!validHttpUrl(linkUrl)) failWith(400, LINK_ERROR);
     const duration = Math.max(5, Math.min(480, Number(body.duration_minutes) || 30));
     const dup = (await db.all("accountability_requests")).find((r) => r.requester_id === me.id && r.title === title && r.scheduled_for === when.toISOString() && r.status !== "cancelled");
