@@ -144,3 +144,15 @@ Row-level rules in `supabase/schema.sql` say the same thing in SQL: RLS is enabl
 `GET /api/health` · `POST /api/auth/signup` · `POST /api/auth/signin` · `POST /api/auth/signout` · `POST /api/auth/password-reset` · `GET/PATCH /api/me` · `GET/POST /api/requests` · `POST /api/requests/:id/claim` · `GET/POST /api/requests/:id/messages` · `PATCH /api/matches/:id` · `GET /api/calendar` · `GET /api/commitments` · `GET /api/content` · `POST /api/account/export` · `DELETE /api/account` · `GET /api/admin/overview` · `GET /api/admin/members` · `GET/POST /api/admin/invites` · `GET /api/admin/content` · `PUT /api/admin/content/:id` · `GET /api/admin/integrations` · `GET /api/admin/audit`
 
 Made for Glam's private community. One complete app: front end + back end + production schema, in this one repo.
+
+## Password reset and reminders
+
+The live Netlify backend supports one-time password-reset links, in-app reminders, and optional email reminders. Never put email credentials in the front end or repository.
+
+1. In Resend, verify a sending domain and create a sending-only API key.
+2. In Netlify → Project configuration → Environment variables, add `RESEND_API_KEY` (secret; Functions scope) and `EMAIL_FROM` (a verified sender, for example `Accountability <support@your-verified-domain.com>`). Do not use the example address literally.
+3. Redeploy the app. Test Forgot your password using an existing account. Reset links expire after 30 minutes, work once, and invalidate existing sign-in sessions after the password changes.
+4. The `reminders` scheduled function runs every five minutes. Reminders appear in-app within one hour and again within fifteen minutes of the commitment. Open the app to see in-app reminders; it also refreshes reminders while open. Email reminders require members to opt in separately in Account. Marketing opt-in does not subscribe a member to reminder emails.
+5. Reminder email retries reuse a provider idempotency key. Calendar events stay grouped when several members support one request.
+
+Run regression tests with `node --test tests/api.test.cjs`. The tests use in-memory records and a mock email sender; they do not email real members. Email acceptance and inbox delivery must be checked after the sender is configured.
