@@ -290,7 +290,7 @@ async function handle(db, method, rawPath, headers, body, ip, query = {}) {
     let invite = null;
     if (!isOwner) { // owner bypasses the invite requirement so she can always claim admin
       const code = clean(body.inviteCode, 40).toUpperCase();
-      invite = (await db.all("invites")).find((i) => i.code === code && i.is_active && i.use_count < i.max_uses && (!i.expires_at || new Date(i.expires_at) > new Date()));
+      invite = (await db.all("invites")).find((i) => i.code === code && i.is_active && (i.max_uses == null || i.use_count < i.max_uses) && (!i.expires_at || new Date(i.expires_at) > new Date()));
       if (!invite) failWith(403, "That invite code didn't work. This community is invite-only — check the code or ask the owner for a fresh one.");
     }
     const profile = await db.insert("profiles", { email, display_name: name, consent_accepted_at: now(), marketing_email_opt_in: body.marketingOptIn === true });
@@ -300,7 +300,7 @@ async function handle(db, method, rawPath, headers, body, ip, query = {}) {
     if (isOwner) await db.insert("user_roles", { user_id: profile.id, role: "admin" });
     if (invite) {
       invite.use_count += 1; invite.used_by = profile.id;
-      if (invite.use_count >= invite.max_uses) invite.is_active = false;
+      if (invite.max_uses != null && invite.use_count >= invite.max_uses) invite.is_active = false;
       await db.update("invites", invite);
     }
     const token = crypto.randomBytes(32).toString("hex");
@@ -648,9 +648,19 @@ async function handle(db, method, rawPath, headers, body, ip, query = {}) {
       failWith(403, "Admin is locked to the owner account only (" + OWNER_ADMIN_EMAIL + "). Member roles can't be promoted.");
     }
     if (p === "/api/admin/invites" && method === "GET") return { status: 200, obj: { invites: await db.all("invites") } };
+    if (p === "/api/admin/invites/reuse" && method === "POST") {
+      let updated = 0;
+      for (const invite of await db.all("invites")) {
+        if (invite.max_uses !== 1 || (!invite.is_active && invite.use_count < 1)) continue;
+        invite.max_uses = null; invite.is_active = true;
+        await db.update("invites", invite); updated++;
+      }
+      await audit(db, admin.id, "invites_made_reusable", "invite", "community", String(updated));
+      return { status: 200, obj: { updated } };
+    }
     if (p === "/api/admin/invites" && method === "POST") {
       const code = crypto.randomBytes(4).toString("hex").toUpperCase();
-      const inv = await db.insert("invites", { code, created_by: admin.id, used_by: null, max_uses: 1, use_count: 0, expires_at: null, is_active: true });
+      const inv = await db.insert("invites", { code, created_by: admin.id, used_by: null, max_uses: null, use_count: 0, expires_at: null, is_active: true });
       await audit(db, admin.id, "invite_created", "invite", inv.id, code);
       return { status: 201, obj: { invite: inv } };
     }
