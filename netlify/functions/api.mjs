@@ -17,6 +17,7 @@ import { getStore } from "@netlify/blobs";
 import crypto from "node:crypto";
 import { emailConfigured, sendAccountabilityEmail } from "../../server/lib/email.mjs";
 import { createReminders, reminderEmail } from "../../server/lib/reminders.mjs";
+import { googleReady, beginGoogle, finishGoogle, syncMemberCalendar } from "../../server/lib/google-calendar.mjs";
 
 const OWNER_ADMIN_EMAIL = "nakeymasi@gmail.com"; // the ONLY account that can ever be admin
 const STORE_NAME = "accountability";
@@ -241,12 +242,40 @@ const LINK_ERROR = "That link doesn't look right — links start with https://";
 /* ---------------- Core handler ----------------
    method/path/headers/body/ip in, { status, obj } out.
    Adapters for Netlify Functions v2 (fetch) and v1 (handler) are below. */
-async function handle(db, method, rawPath, headers, body, ip) {
+async function handle(db, method, rawPath, headers, body, ip, query = {}) {
   const p = rawPath;
   const seg = p.split("/").filter(Boolean); // ["api", ...]
   await ensureSeeded(db);
 
   if (p === "/api/health") return { status: 200, obj: { ok: true } };
+
+  if (p === "/api/google/callback" && method === "GET") {
+    try { await finishGoogle(db, query); return { status: 302, redirect: "/#google=connected" }; }
+    catch (_) { return { status: 302, redirect: "/#google=error" }; }
+  }
+  if (p.startsWith("/api/google/")) {
+    const { profile } = await requireAuth(db, headers);
+    if (p === "/api/google/status" && method === "GET") {
+      const c = await db.getDirect("google_connections", profile.id);
+      return { status: 200, obj: { available: googleReady(), connected: Boolean(c), lastSyncedAt: c?.last_synced_at || null, error: c?.last_error || "" } };
+    }
+    if (p === "/api/google/connect" && method === "POST") {
+      if (!googleReady()) failWith(503, "The owner must finish Google's setup before members can connect. Phone installation and notifications already work.");
+      if (await rateLimited(db, ip, "google-connect")) failWith(429, "Please wait before trying again.");
+      return { status: 200, obj: { url: await beginGoogle(db, profile.id) } };
+    }
+    if (p === "/api/google/sync" && method === "POST") {
+      if (await rateLimited(db, ip, "google-sync")) failWith(429, "Please wait before syncing again.");
+      try { return { status: 200, obj: await syncMemberCalendar(db, profile.id) }; }
+      catch (_) { failWith(503, "Google sync needs attention. Reconnect your Google calendar and try again."); }
+    }
+    if (p === "/api/google/disconnect" && method === "POST") {
+      await db.removeWhere("google_oauth_states", row => row.user_id === profile.id);
+      await db.remove("google_connections", profile.id);
+      return { status: 200, obj: { ok: true } };
+    }
+    failWith(404, FRIENDLY.notFound);
+  }
 
   /* ----- Auth ----- */
   if (p === "/api/auth/signup" && method === "POST") {
@@ -347,8 +376,11 @@ async function handle(db, method, rawPath, headers, body, ip) {
     const matches = await db.all("matches");
     const notifications = (await db.all("notifications")).filter(n => {
       const request = requests.find(r => r.id === n.request_id);
-      return n.user_id === profile.id && request && ["open", "matched"].includes(request.status) && new Date(n.starts_at) > new Date() && (request.requester_id === profile.id || matches.some(m => m.request_id === request.id && m.partner_id === profile.id && m.status === "active"));
-    }).sort((a,b) => a.starts_at.localeCompare(b.starts_at));
+      const belongs = n.user_id === profile.id && request;
+      if (!belongs) return false;
+      if (n.kind === "request_posted" || n.kind === "supporter_joined") return request.status !== "cancelled";
+      return ["open", "matched"].includes(request.status) && new Date(n.starts_at) > new Date() && (request.requester_id === profile.id || matches.some(m => m.request_id === request.id && m.partner_id === profile.id && m.status === "active"));
+    }).sort((a,b) => b.created_at.localeCompare(a.created_at)).slice(0,100);
     return { status: 200, obj: { notifications } };
   }
   if (p === "/api/notifications/read" && method === "POST") {
@@ -419,6 +451,9 @@ async function handle(db, method, rawPath, headers, body, ip) {
     const dup = (await db.all("accountability_requests")).find((r) => r.requester_id === me.id && r.title === title && r.scheduled_for === when.toISOString() && r.status !== "cancelled");
     if (dup) failWith(409, "You already posted this exact request for that time — it's in the feed already.");
     const r = await db.insert("accountability_requests", { requester_id: me.id, title, what_needed: what, partner_duties: duties, scheduled_for: when.toISOString(), duration_minutes: duration, location_or_link: clean(body.location_or_link, 300), link_url: linkUrl, status: "open" });
+    for (const member of (await db.all("profiles")).filter(p => p.id !== me.id)) {
+      await db.insertWithId("notifications", { id: hashToken(`new-request:${r.id}:${member.id}`), user_id: member.id, request_id: r.id, title: r.title, kind: "request_posted", body: `${me.display_name} posted a new accountability request.`, read_at: null, starts_at: r.scheduled_for });
+    }
     return { status: 201, obj: { request: r } };
   }
   if (seg[1] === "requests" && seg.length === 3 && method === "GET") {
@@ -461,6 +496,8 @@ async function handle(db, method, rawPath, headers, body, ip) {
     const previousEvent = (await db.all("calendar_events")).find(e => e.match_id === id);
     if (!previousEvent) await db.store.setJSON(keyFor("calendar_events", id), event, { onlyIfNew: true });
     else if (previousEvent.status !== "scheduled") { previousEvent.status = "scheduled"; await db.update("calendar_events", previousEvent); }
+    db.cache.delete("calendar_events");
+    await db.store.setJSON(keyFor("notifications", hashToken(`joined:${match.id}`)), { id: hashToken(`joined:${match.id}`), user_id: r.requester_id, request_id: r.id, title: r.title, kind: "supporter_joined", body: `${me.display_name} joined your request as a supporter.`, read_at: null, starts_at: r.scheduled_for, created_at: now(), updated_at: now() }, { onlyIfNew: true });
     db.cache.delete("calendar_events");
     return { status: 201, obj: { match } };
   }
@@ -581,6 +618,9 @@ async function handle(db, method, rawPath, headers, body, ip) {
     await db.removeWhere("sessions", (s) => s.user_id === me.id);
     await db.removeWhere("notifications", n => n.user_id === me.id || owned.has(n.request_id));
     await db.removeWhere("password_resets", r => r.user_id === me.id);
+    await db.removeWhere("google_connections", r => r.user_id === me.id);
+    await db.removeWhere("google_oauth_states", r => r.user_id === me.id);
+    await db.removeWhere("google_event_sync", r => r.user_id === me.id);
     await db.removeWhere("credentials", (c) => c.user_id === me.id);
     await db.removeWhere("user_roles", (r) => r.user_id === me.id);
     await db.removeWhere("profiles", (x) => x.id === me.id);
@@ -631,7 +671,7 @@ async function handle(db, method, rawPath, headers, body, ip) {
         { provider: "Community email", status: emailConfigured() ? "Ready" : "Owner setup needed", description: "Sends password-reset links and opted-in reminders to members' sign-up email. No Gmail connection needed." },
         { provider: "Shared app calendar", status: "Available", description: "Matched requests appear in the Calendar tab with all supporters." },
         { provider: "Zoom meeting links", status: "Available", description: "Paste an existing Zoom link into a request. The app does not create Zoom meetings." },
-        { provider: "Google Calendar sync", status: "Not included", description: "The Calendar tab works inside this app. Automatic Google Calendar sync is not built." },
+        { provider: "Private Google Calendar sync", status: googleReady() ? "Ready for member connections" : "Owner Google setup required", description: "Each member connects their own Google account. Only their accountability commitments sync into a separate private calendar; other calendar events are never read." },
       ];
       return { status: 200, obj: { integrations } };
     }
@@ -652,10 +692,10 @@ function normalizePath(pathname) {
   if (pathname.startsWith(marker)) return "/api" + pathname.slice(marker.length);
   return pathname;
 }
-async function run(method, pathname, headers, body, ip) {
+async function run(method, pathname, headers, body, ip, query = {}) {
   const db = new Db(getStore({ name: STORE_NAME, consistency: "strong" }));
   try {
-    return await handle(db, method, normalizePath(pathname), headers, body || {}, ip || "unknown");
+    return await handle(db, method, normalizePath(pathname), headers, body || {}, ip || "unknown", query);
   } catch (err) {
     if (err instanceof HttpError) return { status: err.status, obj: { error: err.message } };
     console.error(err); // server log only — clients always get the friendly line
@@ -673,7 +713,8 @@ export default async function handlerV2(req) {
   const headers = {};
   req.headers.forEach((v, k) => { headers[k.toLowerCase()] = v; });
   const ip = headers["x-nf-client-connection-ip"] || (headers["x-forwarded-for"] || "").split(",")[0].trim() || "unknown";
-  const { status, obj } = await run(req.method, url.pathname, headers, body, ip);
+  const { status, obj, redirect } = await run(req.method, url.pathname, headers, body, ip, Object.fromEntries(url.searchParams));
+  if (redirect) return new Response(null, { status, headers: { Location: redirect, "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" } });
   return new Response(JSON.stringify(obj), { status, headers: { "Content-Type": "application/json", "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" } });
 }
 
@@ -684,7 +725,8 @@ export async function handler(event) {
   const headers = {};
   for (const [k, v] of Object.entries(event.headers || {})) headers[k.toLowerCase()] = v;
   const ip = headers["x-nf-client-connection-ip"] || (headers["x-forwarded-for"] || "").split(",")[0].trim() || "unknown";
-  const { status, obj } = await run(event.httpMethod || "GET", event.path || "/", headers, body, ip);
+  const { status, obj, redirect } = await run(event.httpMethod || "GET", event.path || "/", headers, body, ip, event.queryStringParameters || {});
+  if (redirect) return { statusCode: status, headers: { Location: redirect, "Cache-Control": "no-store", "Referrer-Policy": "no-referrer" }, body: "" };
   return { statusCode: status, headers: { "Content-Type": "application/json", "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" }, body: JSON.stringify(obj) };
 }
 
