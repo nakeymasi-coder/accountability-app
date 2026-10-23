@@ -76,3 +76,6 @@ button:disabled { opacity:.6; cursor:wait; animation:none!important; }
 button:focus-visible, a:focus-visible { outline:3px solid #103b63; outline-offset:3px; }
 .bottom-nav { bottom:max(14px,env(safe-area-inset-bottom)); }
 @media(max-width:380px){ .nav-btn{padding:12px 10px} .brand{gap:7px} .brand h1{font-size:1.15rem} .app-header{padding:12px} }
+
+.header-actions{display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-end}.header-actions .pill-btn{padding:10px 14px}
+@media(max-width:480px){.app-header{align-items:flex-start;gap:8px}.header-actions{max-width:125px}.header-actions .pill-btn{font-size:.8rem;padding:8px 10px}}
