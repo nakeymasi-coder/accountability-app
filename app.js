@@ -63,7 +63,7 @@ async function api(path, options = {}) {
 async function call(path, options) { return api(path, options); }
 
 /* ================= SCREENS ================= */
-const SCREENS = ["auth", "install", "reset-confirm", "reminders", "feed", "new-request", "request-detail", "calendar", "commitments", "account", "admin"];
+const SCREENS = ["auth", "home", "install", "reset-confirm", "reminders", "feed", "new-request", "request-detail", "calendar", "commitments", "account", "admin"];
 function show(name) {
   navigationVersion++;
   showError("global-error", "");
@@ -94,6 +94,35 @@ function requestCard(r, mine) {
   if (!mine && ["open", "matched"].includes(r.status) && !(r.supporters || []).some(p => p.id === state.user.id) && new Date(r.scheduled_for) > new Date()) { const c = document.createElement("button"); c.className = "pill-btn primary"; c.textContent = "I'm available — Support"; c.onclick = () => claimRequest(r.id); row.appendChild(c); }
   const lp = linkPill(r.link_url); if (lp) row.appendChild(lp);
   el.appendChild(row); return el;
+}
+async function loadHome() {
+  show("home");
+  const version = navigationVersion;
+  $("home-greeting").textContent = `Welcome back, ${(state.user.display_name || state.user.name || "friend").split(" ")[0]}.`;
+  $("home-next").innerHTML = "<p>Loading your next commitment…</p>";
+  ["home-open-count", "home-upcoming-count", "home-unread-count"].forEach(id => $(id).textContent = "—");
+  showError("home-error", "");
+  try {
+    const [feed, commitments, notifications] = await Promise.all([call("/api/requests"), call("/api/commitments"), call("/api/notifications")]);
+    if (version !== navigationVersion || !state.user) return;
+    state.requests = feed.requests;
+    const future = r => new Date(r.scheduled_for) > new Date();
+    const available = feed.requests.filter(r => ["open", "matched"].includes(r.status) && future(r) && r.requester_id !== state.user.id && !(r.supporters || []).some(p => p.id === state.user.id));
+    const plans = new Map();
+    feed.requests.filter(r => r.requester_id === state.user.id && ["open", "matched"].includes(r.status) && future(r)).forEach(r => plans.set(r.id, {id:r.id, title:r.title, when:r.scheduled_for, role:"Your request"}));
+    commitments.matches.filter(m => m.status === "active" && future(m)).forEach(m => plans.set(m.request_id, {id:m.request_id, title:m.request_title, when:m.scheduled_for, role:m.requester_id === state.user.id ? "Your request" : "You’re supporting"}));
+    const upcoming = [...plans.values()].sort((a,b) => new Date(a.when)-new Date(b.when));
+    $("home-open-count").textContent = available.length;
+    $("home-upcoming-count").textContent = upcoming.length;
+    $("home-unread-count").textContent = notifications.notifications.filter(n => !n.read_at).length;
+    const next = upcoming[0], box = $("home-next");
+    box.innerHTML = next ? `<div><span class="home-next-label">${esc(next.role)}</span><h4>${esc(next.title)}</h4><p>${esc(fmtWhen(next.when))}</p></div>` : '<div><span class="home-next-label">YOUR NEXT CHAPTER STARTS HERE</span><h4>One goal. One first step.</h4><p>No upcoming commitments yet. Ask for support or explore the community feed to get started.</p></div>';
+    const button = document.createElement("button"); button.className = "pill-btn"; button.type = "button"; button.textContent = next ? "View commitment →" : "Explore the feed →"; button.onclick = () => next ? openRequest(next.id).catch(e => toast(friendly(e))) : loadFeed(); box.appendChild(button);
+  } catch (error) {
+    if (version !== navigationVersion) return;
+    $("home-next").innerHTML = "<p>Your plans couldn’t load. Tap Home to try again.</p>";
+    showError("home-error", friendly(error));
+  }
 }
 async function loadFeed() {
   const version = ++navigationVersion;
@@ -211,6 +240,7 @@ async function refreshReminders() {
     if (!state.user) return;
     reminders = data.notifications;
     const unread = reminders.filter(n => !n.read_at).length;
+    if ($("home-unread-count")) $("home-unread-count").textContent = unread;
     $("btn-reminders").textContent = unread ? `Notifications (${unread})` : "Notifications";
   } finally { reminderBusy = false; }
 }
@@ -233,6 +263,13 @@ async function refreshContent() { try { const d = await call("/api/content"); st
 
 /* ================= EVENTS ================= */
 function wire() {
+  $("home-post").onclick = () => $("btn-new-request").click();
+  $("home-browse").onclick = () => loadFeed();
+  $("home-stat-feed").onclick = () => loadFeed();
+  $("home-stat-mine").onclick = () => loadCommitments();
+  $("home-stat-alerts").onclick = () => loadReminders();
+  $("home-calendar").onclick = () => loadCalendar();
+  $("home-setup").onclick = () => loadAccount();
   $("btn-install-help").onclick = () => show("install");
   $("btn-install-back").onclick = () => loadAccount();
   $("btn-install-app").onclick = async () => { if (!installPrompt) return; await installPrompt.prompt(); await installPrompt.userChoice; installPrompt = null; $("btn-install-app").classList.add("hidden"); };
@@ -271,10 +308,10 @@ function wire() {
   $("link-privacy").onclick = (e) => { e.preventDefault(); const p = state.content.find((c) => c.slug === "privacy-policy"); $("privacy-dialog-body").textContent = p ? p.body : "Privacy policy could not load. Please refresh before signing up."; $("privacy-dialog").showModal(); };
 
   $("signin-form").onsubmit = async (e) => { e.preventDefault(); showError("signin-error", "");
-    try { const d = await call("/api/auth/signin", { method: "POST", body: { email: $("signin-email").value, password: $("signin-password").value } }); if (d.token) localStorage.setItem(CONFIG.TOKEN_KEY, d.token); state.user = d.user; setSignedInUI(); await refreshContent(); loadFeed(); refreshReminders().catch(() => {}); }
+    try { const d = await call("/api/auth/signin", { method: "POST", body: { email: $("signin-email").value, password: $("signin-password").value } }); if (d.token) localStorage.setItem(CONFIG.TOKEN_KEY, d.token); state.user = d.user; setSignedInUI(); await refreshContent(); loadHome(); refreshReminders().catch(() => {}); }
     catch (err) { showError("signin-error", friendly(err)); } };
   $("signup-form").onsubmit = async (e) => { e.preventDefault(); showError("signup-error", "");
-    try { const d = await call("/api/auth/signup", { method: "POST", body: { name: $("signup-name").value, email: $("signup-email").value, password: $("signup-password").value, inviteCode: $("signup-invite").value, consent: $("signup-consent").checked, marketingOptIn: $("signup-marketing").checked, website: $("signup-website").value } }); if (d.token) localStorage.setItem(CONFIG.TOKEN_KEY, d.token); state.user = d.user; setSignedInUI(); await refreshContent(); loadFeed(); refreshReminders().catch(() => {}); }
+    try { const d = await call("/api/auth/signup", { method: "POST", body: { name: $("signup-name").value, email: $("signup-email").value, password: $("signup-password").value, inviteCode: $("signup-invite").value, consent: $("signup-consent").checked, marketingOptIn: $("signup-marketing").checked, website: $("signup-website").value } }); if (d.token) localStorage.setItem(CONFIG.TOKEN_KEY, d.token); state.user = d.user; setSignedInUI(); await refreshContent(); loadHome(); refreshReminders().catch(() => {}); }
     catch (err) { showError("signup-error", friendly(err)); } };
   $("reset-form").onsubmit = async (e) => { e.preventDefault();
     if (!e.target.reportValidity()) return;
@@ -283,7 +320,7 @@ function wire() {
     catch (err) { toast(friendly(err)); } };
   $("btn-signout").onclick = async () => { try { await call("/api/auth/signout", { method: "POST", body: {} }); } catch (_) {} localStorage.removeItem(CONFIG.TOKEN_KEY); state.user = null; navigationVersion++; $("export-output").textContent = ""; $("export-output").classList.add("hidden"); setSignedInUI(); };
 
-  document.querySelectorAll(".nav-btn").forEach((b) => { b.onclick = () => { const n = b.dataset.nav; if (n === "feed") return loadFeed(); else if (n === "calendar") return loadCalendar(); else if (n === "commitments") return loadCommitments(); else if (n === "account") return loadAccount(); else if (n === "admin") return loadAdmin(); }; });
+  document.querySelectorAll(".nav-btn").forEach((b) => { b.onclick = () => { const n = b.dataset.nav; if (n === "home") return loadHome(); else if (n === "feed") return loadFeed(); else if (n === "calendar") return loadCalendar(); else if (n === "commitments") return loadCommitments(); else if (n === "account") return loadAccount(); else if (n === "admin") return loadAdmin(); }; });
   $("btn-new-request").onclick = () => { const d = new Date(); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); $("req-when").min = d.toISOString().slice(0,16); show("new-request"); };
   $("btn-cancel-request").onclick = () => loadFeed();
   $("btn-back-feed").onclick = () => loadFeed();
@@ -347,7 +384,7 @@ window.addEventListener("unhandledrejection", e => { e.preventDefault(); showErr
   await refreshContent();
   if (resetToken) { show("reset-confirm"); return; }
   if (token()) {
-    try { const d = await call("/api/me"); state.user = d.user; setSignedInUI(); if (googleReturn) { await loadAccount(); toast(googleReturn === "connected" ? "Google connected. Your private calendar will sync shortly." : "Google connection did not finish. Try again from Account."); } else loadFeed(); refreshReminders().catch(() => {}); return; }
+    try { const d = await call("/api/me"); state.user = d.user; setSignedInUI(); if (googleReturn) { await loadAccount(); toast(googleReturn === "connected" ? "Google connected. Your private calendar will sync shortly." : "Google connection did not finish. Try again from Account."); } else loadHome(); refreshReminders().catch(() => {}); return; }
     catch (error) { if (error.status === 401) localStorage.removeItem(CONFIG.TOKEN_KEY); else showError("global-error", friendly(error)); }
   }
   setSignedInUI();
