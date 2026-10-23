@@ -18,7 +18,7 @@ function fixture() {
   seed('profiles',{id:'owner',email:'nakeymasi@gmail.com',display_name:'Owner'});
   seed('profiles',{id:'partner',email:'partner@example.com',display_name:'Partner'});
   seed('sessions',{id:crypto.createHash('sha256').update('test').digest('hex'),token_hash:crypto.createHash('sha256').update('test').digest('hex'),user_id:'owner',expires_at:'2099-01-01'});
-  return {db,seed,rows,store,call:(method,path,body={})=>handle(db,method,path,auth,body,'test')};
+  return {db,seed,rows,store,call:async(method,path,body={})=>{context.reminderEmail=(await reminderModule).reminderEmail;return handle(db,method,path,auth,body,'test')}};
 }
 test('all records are read across multiple pages; storage failure is not an empty table', async()=>{
  const f=fixture(); for(let i=0;i<7;i++) await f.seed('messages',{id:String(i)});
@@ -119,4 +119,21 @@ test('notifications belong only to the signed-in member',async()=>{
  await f.seed('accountability_requests',{id:'r',requester_id:'owner',title:'Test',scheduled_for:starts_at,status:'open'});
  await f.seed('notifications',{id:'other',user_id:'partner',request_id:'r',starts_at});
  const result=await f.call('GET','/api/notifications');assert.equal(result.obj.notifications.length,0);
+});
+
+test('email service status is current and never exposes credentials',async()=>{
+ const f=fixture();context.emailConfigured=()=>true;
+ try {const r=await f.call('GET','/api/services');assert.equal(r.obj.emailReady,true);assert.equal(r.obj.personalEmailConnectionRequired,false);assert.equal(Object.keys(r.obj).length,2);}
+ finally {context.emailConfigured=()=>false;}
+});
+test('test reminder sends only to the signed-in account email',async()=>{
+ const f=fixture();let sent;context.emailConfigured=()=>true;context.sendAccountabilityEmail=async value=>{sent=value;return 'ok'};
+ try {await f.call('POST','/api/me/test-reminder',{email:'someone-else@example.com'});assert.equal(sent.to,'nakeymasi@gmail.com');assert.match(sent.subject,/Test/);}
+ finally {context.emailConfigured=()=>false;}
+});
+test('unsupported integrations are clearly distinguished from available features',async()=>{
+ const f=fixture();await f.seed('user_roles',{id:'admin',user_id:'owner',role:'admin'});
+ const r=await f.call('GET','/api/admin/integrations');
+ assert.equal(r.obj.integrations.find(x=>x.provider==='Google Calendar sync').status,'Not included');
+ assert.equal(r.obj.integrations.find(x=>x.provider==='Shared app calendar').status,'Available');
 });
