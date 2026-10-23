@@ -154,7 +154,14 @@ async function loadCommitments() {
   $("commitments-empty").classList.toggle("hidden", data.matches.length > 0); show("commitments");
 }
 async function loadAccount() {
+  const version = ++navigationVersion;
+  const [me, services] = await Promise.all([call("/api/me"), call("/api/services")]);
+  if (version !== navigationVersion || !state.user) return;
+  state.user = me.user;
   const u = state.user;
+  $("account-email-status").textContent = services.emailReady ? "Community email: Ready — password resets and reminder emails are enabled." : "Community email: Owner setup needed. You do not need to connect your email account.";
+  $("account-reminders").disabled = !services.emailReady;
+  $("btn-test-reminder").disabled = !services.emailReady;
   $("account-name").textContent = u.display_name; $("account-email").textContent = u.email;
   $("account-role").textContent = u.roles.includes("admin") ? "Owner · Admin" : "Member";
   $("account-marketing").checked = !!u.marketing_email_opt_in;
@@ -185,7 +192,7 @@ async function loadAdmin() {
     wrap.onsubmit = async (ev) => { ev.preventDefault(); try { await call(`/api/admin/content/${c.id}`, { method: "PUT", body: { title: wrap.querySelector("input").value, body: wrap.querySelector("textarea").value, is_published: true } }); toast("Saved."); refreshContent(); } catch (e) { toast(friendly(e)); } };
     $("admin-content").appendChild(wrap);
   });
-  $("admin-integrations").innerHTML = integ.integrations.map((i) => `<p><strong>${esc(i.provider)}</strong> — ${esc(i.status)}${i.external_account_label ? " · " + esc(i.external_account_label) : ""}</p>`).join("");
+  $("admin-integrations").innerHTML = integ.integrations.map((i) => `<p><strong>${esc(i.provider)}</strong> — ${esc(i.status)}<br><span class="muted small">${esc(i.description || "")}</span></p>`).join("");
   $("admin-audit").innerHTML = aud.audit.map((a) => `<p class="small">${esc(fmtWhen(a.created_at))} · ${esc(a.action)} · ${esc(a.target_type)} · ${esc(a.details || "")}</p>`).join("") || "<p class='muted'>No admin actions yet.</p>";
   show("admin");
 }
@@ -230,8 +237,13 @@ function wire() {
       resetToken = ""; e.target.reset(); localStorage.removeItem(CONFIG.TOKEN_KEY); state.user = null; setSignedInUI(); $("tab-signin").click(); toast("Password updated. Sign in with your new password.");
     } catch(error) { showError("reset-confirm-error", friendly(error)); }
   };
+  $("btn-test-reminder").onclick = async () => {
+    showError("test-reminder-message", "");
+    const result = await call("/api/me/test-reminder", { method: "POST", body: {} });
+    showError("test-reminder-message", result.message);
+  };
   $("account-reminders").onchange = async e => {
-    try { const d = await call("/api/me", { method: "PATCH", body: { reminderOptIn: e.target.checked } }); state.user = d.user; toast(e.target.checked ? "Email reminder preference saved. Emails require the community email connection." : "Reminder emails turned off."); }
+    try { const d = await call("/api/me", { method: "PATCH", body: { reminderOptIn: e.target.checked } }); state.user = d.user; toast(e.target.checked ? "Reminder emails are on. They will go to your account email before upcoming commitments." : "Reminder emails turned off."); }
     catch(error) { e.target.checked = !!state.user?.reminder_email_opt_in; toast(friendly(error)); }
   };
   $("close-privacy").onclick = () => $("privacy-dialog").close();
@@ -269,7 +281,7 @@ function wire() {
     try { await call(`/api/requests/${state.currentRequestId}/messages`, { method: "POST", body: { body: $("message-body").value } }); $("message-body").value = ""; await loadMessages(); const d = await call("/api/requests"); state.requests = d.requests; }
     catch (err) { showError("message-error", friendly(err)); } };
 
-  $("account-marketing").onchange = async (e) => { try { const d = await call("/api/me", { method: "PATCH", body: { marketingOptIn: e.target.checked } }); state.user = d.user; toast(e.target.checked ? "You're subscribed to community news." : "You've unsubscribed from community news emails."); } catch (err) { e.target.checked = !!state.user.marketing_email_opt_in; toast(friendly(err)); } };
+  $("account-marketing").onchange = async (e) => { try { const d = await call("/api/me", { method: "PATCH", body: { marketingOptIn: e.target.checked } }); state.user = d.user; toast(e.target.checked ? "Your community-news preference is saved." : "You've unsubscribed from community news emails."); } catch (err) { e.target.checked = !!state.user.marketing_email_opt_in; toast(friendly(err)); } };
   $("btn-export").onclick = async () => { try { const d = await call("/api/account/export", { method: "POST", body: {} }); const out = $("export-output"); out.textContent = JSON.stringify(d.export, null, 2); out.classList.remove("hidden"); toast("Your data export is below — copy and save it."); } catch (err) { toast(friendly(err)); } };
   $("btn-delete-data").onclick = async () => { if (!confirm("Delete your account and all your data? This can't be undone.")) return; try { await call("/api/account", { method: "DELETE" }); localStorage.removeItem(CONFIG.TOKEN_KEY); state.user = null; setSignedInUI(); toast("Your account and data were deleted."); } catch (err) { toast(friendly(err)); } };
   $("invite-form").onsubmit = async (e) => { e.preventDefault(); try { await call("/api/admin/invites", { method: "POST", body: {} }); toast("Invite code created."); loadAdmin(); } catch (err) { toast(friendly(err)); } };
