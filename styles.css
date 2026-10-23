@@ -67,3 +67,12 @@ a.link-pill{text-decoration:none;display:inline-flex;align-items:center}
 .prose p{line-height:1.55}
 @media (min-width:640px){body{padding-bottom:110px}.brand h1{font-size:1.5rem}h2{font-size:1.4rem}}
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+
+/* Readable reply controls, long member content, and phone safe areas. */
+.card3d, .prose, dialog { overflow-wrap:anywhere; }
+dialog { max-width:min(92vw,640px); border:1px solid var(--silver); border-radius:22px; padding:24px; color:var(--ink); }
+dialog::backdrop { background:rgba(23,48,79,.45); }
+button:disabled { opacity:.6; cursor:wait; animation:none!important; }
+button:focus-visible, a:focus-visible { outline:3px solid #103b63; outline-offset:3px; }
+.bottom-nav { bottom:max(14px,env(safe-area-inset-bottom)); }
+@media(max-width:380px){ .nav-btn{padding:12px 10px} .brand{gap:7px} .brand h1{font-size:1.15rem} .app-header{padding:12px} }
