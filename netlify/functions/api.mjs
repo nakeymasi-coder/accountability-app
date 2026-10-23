@@ -58,6 +58,17 @@ class Db {
       return row || null;
     } catch (error) { throw error; }
   }
+  async compareUpdate(table, id, change) {
+    const key = keyFor(table, id);
+    const current = await this.store.getWithMetadata(key, { type: "json", consistency: "strong" });
+    if (!current) failWith(404, FRIENDLY.notFound);
+    const row = change(current.data);
+    row.updated_at = now();
+    const result = await this.store.setJSON(key, row, { onlyIfMatch: current.etag });
+    if (!result.modified) failWith(409, "Someone just updated this request. Refresh and try again.");
+    this.cache.delete(table);
+    return row;
+  }
   async put(table, row) {
     await this.store.setJSON(keyFor(table, row.id), row);
     const rows = await this.all(table);
@@ -370,15 +381,18 @@ async function handle(db, method, rawPath, headers, body, ip) {
   }
   if (seg[1] === "requests" && seg[3] === "claim" && method === "POST") {
     const { profile: me } = await requireAuth(db, headers);
-    const r = await db.get("accountability_requests", seg[2]);
-    if (!r) failWith(404, FRIENDLY.notFound);
-    if (r.requester_id === me.id) failWith(400, "You can't claim your own request — a partner has to claim it.");
-    if (r.status !== "open") failWith(409, "This request is no longer open.");
-    if (new Date(r.scheduled_for) <= new Date()) failWith(400, "This request is in the past. Ask the requester to post a new time.");
-    const match = await db.insert("matches", { request_id: r.id, requester_id: r.requester_id, partner_id: me.id, status: "active", completed_at: null, notes: "" });
-    r.status = "matched"; await db.update("accountability_requests", r);
+    // Conditional write ensures two members cannot both claim the same open request.
+    const r = await db.compareUpdate("accountability_requests", seg[2], current => {
+      if (current.requester_id === me.id) failWith(400, "You can't claim your own request — a partner has to claim it.");
+      if (new Date(current.scheduled_for) <= new Date()) failWith(400, "This request is in the past. Ask the requester to post a new time.");
+      if (current.status === "matched" && current.matched_partner_id === me.id) return current;
+      if (current.status !== "open") failWith(409, "This request is no longer open.");
+      return { ...current, status: "matched", matched_partner_id: me.id, match_id: crypto.randomUUID() };
+    });
+    // Stable IDs make retrying a partially completed claim safe.
+    const match = await db.get("matches", r.match_id) || await db.insertWithId("matches", { id: r.match_id, request_id: r.id, requester_id: r.requester_id, partner_id: me.id, status: "active", completed_at: null, notes: "" });
     const start = new Date(r.scheduled_for);
-    await db.insert("calendar_events", { request_id: r.id, match_id: match.id, title: r.title, starts_at: start.toISOString(), ends_at: new Date(start.getTime() + r.duration_minutes * 60000).toISOString(), requester_id: r.requester_id, partner_id: me.id, status: "scheduled" });
+    if (!await db.get("calendar_events", r.match_id)) await db.insertWithId("calendar_events", { id: r.match_id, request_id: r.id, match_id: match.id, title: r.title, starts_at: start.toISOString(), ends_at: new Date(start.getTime() + r.duration_minutes * 60000).toISOString(), requester_id: r.requester_id, partner_id: me.id, status: "scheduled" });
     return { status: 201, obj: { match } };
   }
   if (seg[1] === "requests" && seg[3] === "messages") {
