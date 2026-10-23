@@ -21,7 +21,7 @@
       <p>Private community · Invite only</p>
     </div>
   </div>
-  <button id="btn-signout" class="pill-btn ghost hidden" type="button">Sign out</button>
+  <div class="header-actions"><button id="btn-reminders" class="pill-btn ghost hidden" type="button">Reminders</button><button id="btn-signout" class="pill-btn ghost hidden" type="button">Sign out</button></div>
 </header>
 
 <div id="server-banner" class="server-banner hidden" role="alert">
@@ -70,7 +70,7 @@
 
       <form id="reset-form" class="form hidden" novalidate>
         <h3>Reset your password</h3>
-        <p class="muted">Email password resets are not connected yet. Contact the community owner for help signing in.</p>
+        <p class="muted">Enter your account email. We’ll send a private reset link when email delivery is connected.</p>
         <label>Email <input id="reset-email" type="email" autocomplete="email" required></label>
         <p id="reset-message" class="field-ok hidden"></p>
         <button class="pill-btn primary" type="submit">Request reset</button>
@@ -79,6 +79,23 @@
     </div>
   </section>
 
+  <section id="screen-reset-confirm" class="screen hidden">
+    <form id="reset-confirm-form" class="card3d form" novalidate>
+      <h2>Choose a new password</h2>
+      <p>Your private reset link expires after 30 minutes and works once.</p>
+      <label>New password <input id="reset-new-password" type="password" autocomplete="new-password" minlength="8" maxlength="256" required></label>
+      <label>Confirm new password <input id="reset-repeat-password" type="password" autocomplete="new-password" minlength="8" maxlength="256" required></label>
+      <p id="reset-confirm-error" class="field-error hidden" role="alert"></p>
+      <button class="pill-btn primary" type="submit">Save new password</button>
+      <button id="btn-reset-signin" class="pill-btn ghost" type="button">Back to sign in</button>
+    </form>
+  </section>
+  <section id="screen-reminders" class="screen hidden">
+    <div class="row-between"><h2>My Reminders</h2><button id="btn-reminders-read" class="pill-btn" type="button">Mark all read</button></div>
+    <p class="muted">Reminders appear about 1 hour and 15 minutes before your commitments. Open the app to see them. Email reminders are optional in Account.</p>
+    <div id="reminders-list" class="stack"></div>
+    <p id="reminders-empty" class="empty hidden">No reminders due yet. Your upcoming commitments are in Calendar and Mine.</p>
+  </section>
   <!-- ===== FEED ===== -->
   <section id="screen-feed" class="screen hidden">
     <div class="row-between"><h2>Community Feed</h2><button id="btn-new-request" class="pill-btn primary" type="button">+ New Request</button></div>
@@ -141,6 +158,7 @@
     <div class="card3d">
       <p><strong id="account-name"></strong><br><span id="account-email" class="muted"></span><br><span id="account-role" class="badge"></span></p>
       <label class="check"><input id="account-marketing" type="checkbox"> <span>Email me community news and updates (uncheck to unsubscribe)</span></label>
+      <label class="check"><input id="account-reminders" type="checkbox"> <span>Email me reminders for my accountability commitments (requires email delivery to be connected)</span></label>
       <div class="stack">
         <button id="btn-export" class="pill-btn" type="button">Export my data</button>
         <pre id="export-output" class="export hidden"></pre>
