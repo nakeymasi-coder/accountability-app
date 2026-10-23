@@ -332,8 +332,11 @@ async function handle(db, method, rawPath, headers, body, ip) {
   const withRequester = async (r) => {
     const profiles = await db.all("profiles");
     const messages = await db.all("messages");
+    const supporters = (await db.all("matches")).filter(m => m.request_id === r.id && m.status === "active").map(m => ({ id: m.partner_id, name: (profiles.find(p => p.id === m.partner_id) || {}).display_name || "Member" }));
     return {
+      supporters,
       ...r,
+      status: ["open", "matched"].includes(r.status) ? (supporters.length ? "matched" : "open") : r.status,
       requester_name: (profiles.find((x) => x.id === r.requester_id) || {}).display_name || "Member",
       message_count: messages.filter((m) => m.request_id === r.id).length,
     };
@@ -381,18 +384,29 @@ async function handle(db, method, rawPath, headers, body, ip) {
   }
   if (seg[1] === "requests" && seg[3] === "claim" && method === "POST") {
     const { profile: me } = await requireAuth(db, headers);
-    // Conditional write ensures two members cannot both claim the same open request.
-    const r = await db.compareUpdate("accountability_requests", seg[2], current => {
-      if (current.requester_id === me.id) failWith(400, "You can't claim your own request — a partner has to claim it.");
-      if (new Date(current.scheduled_for) <= new Date()) failWith(400, "This request is in the past. Ask the requester to post a new time.");
-      if (current.status === "matched" && current.matched_partner_id === me.id) return current;
-      if (current.status !== "open") failWith(409, "This request is no longer open.");
-      return { ...current, status: "matched", matched_partner_id: me.id, match_id: crypto.randomUUID() };
-    });
-    // Stable IDs make retrying a partially completed claim safe.
-    const match = await db.get("matches", r.match_id) || await db.insertWithId("matches", { id: r.match_id, request_id: r.id, requester_id: r.requester_id, partner_id: me.id, status: "active", completed_at: null, notes: "" });
+    const r = await db.get("accountability_requests", seg[2]);
+    if (!r) failWith(404, FRIENDLY.notFound);
+    if (r.requester_id === me.id) failWith(400, "You can't claim your own request — another member can support you.");
+    if (!["open", "matched"].includes(r.status)) failWith(409, "This request is no longer accepting supporters.");
+    if (new Date(r.scheduled_for) <= new Date()) failWith(400, "This request is in the past. Ask the requester to post a new time.");
+    // Each supporter owns a separate record; two different people can join simultaneously.
+    const existing = (await db.all("matches")).find(m => m.request_id === r.id && m.partner_id === me.id && m.status === "active");
+    const id = existing?.id || hashToken(`support:${r.id}:${me.id}`);
+    let match = existing || await db.get("matches", id);
+    if (!match) {
+      match = { id, request_id: r.id, requester_id: r.requester_id, partner_id: me.id, status: "active", completed_at: null, notes: "", created_at: now(), updated_at: now() };
+      const result = await db.store.setJSON(keyFor("matches", id), match, { onlyIfNew: true });
+      if (!result.modified) match = await db.getDirect("matches", id);
+      db.cache.delete("matches");
+    } else if (match.status !== "active") {
+      match = await db.compareUpdate("matches", id, current => ({ ...current, status: "active", completed_at: null }));
+    }
     const start = new Date(r.scheduled_for);
-    if (!await db.get("calendar_events", r.match_id)) await db.insertWithId("calendar_events", { id: r.match_id, request_id: r.id, match_id: match.id, title: r.title, starts_at: start.toISOString(), ends_at: new Date(start.getTime() + r.duration_minutes * 60000).toISOString(), requester_id: r.requester_id, partner_id: me.id, status: "scheduled" });
+    const event = { id, request_id: r.id, match_id: id, title: r.title, starts_at: start.toISOString(), ends_at: new Date(start.getTime() + r.duration_minutes * 60000).toISOString(), requester_id: r.requester_id, partner_id: me.id, status: "scheduled", created_at: now(), updated_at: now() };
+    const previousEvent = (await db.all("calendar_events")).find(e => e.match_id === id);
+    if (!previousEvent) await db.store.setJSON(keyFor("calendar_events", id), event, { onlyIfNew: true });
+    else if (previousEvent.status !== "scheduled") { previousEvent.status = "scheduled"; await db.update("calendar_events", previousEvent); }
+    db.cache.delete("calendar_events");
     return { status: 201, obj: { match } };
   }
   if (seg[1] === "requests" && seg[3] === "messages") {
@@ -423,8 +437,12 @@ async function handle(db, method, rawPath, headers, body, ip) {
     m.status = body.status; m.completed_at = body.status === "completed" ? now() : null;
     await db.update("matches", m);
     const r = await db.get("accountability_requests", m.request_id);
-    if (r && r.status !== "cancelled" && body.status === "released") { r.status = "open"; await db.update("accountability_requests", r); }
-    if (r && ["completed", "no_show"].includes(body.status)) { r.status = body.status; await db.update("accountability_requests", r); }
+    if (r && r.status !== "cancelled") {
+      const siblings = (await db.all("matches")).filter(x => x.request_id === r.id);
+      const active = siblings.some(x => x.status === "active");
+      r.status = active ? "matched" : siblings.some(x => x.status === "completed") ? "completed" : body.status === "no_show" ? "no_show" : "open";
+      await db.update("accountability_requests", r);
+    }
     const ev = (await db.all("calendar_events")).find((x) => x.match_id === m.id);
     if (ev) { ev.status = body.status === "released" ? "cancelled" : body.status; await db.update("calendar_events", ev); }
     return { status: 200, obj: { match: m } };
@@ -443,7 +461,13 @@ async function handle(db, method, rawPath, headers, body, ip) {
         requester_name: (profiles.find((x) => x.id === e.requester_id) || {}).display_name || "Member",
         partner_name: (profiles.find((x) => x.id === e.partner_id) || {}).display_name || "Member",
       }));
-    return { status: 200, obj: { events } };
+    const grouped = new Map();
+    for (const e of events) {
+      if (!grouped.has(e.request_id)) grouped.set(e.request_id, { ...e, supporters: [] });
+      const group = grouped.get(e.request_id);
+      if (!group.supporters.some(p => p.id === e.partner_id)) group.supporters.push({ id: e.partner_id, name: e.partner_name });
+    }
+    return { status: 200, obj: { events: [...grouped.values()].map(e => ({ ...e, partner_name: e.supporters.map(p => p.name).join(", ") })) } };
   }
   if (p === "/api/commitments" && method === "GET") {
     const { profile: me } = await requireAuth(db, headers);
