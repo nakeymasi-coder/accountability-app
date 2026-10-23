@@ -15,6 +15,8 @@
  */
 import { getStore } from "@netlify/blobs";
 import crypto from "node:crypto";
+import { emailConfigured, sendAccountabilityEmail } from "../../server/lib/email.mjs";
+import { createReminders } from "../../server/lib/reminders.mjs";
 
 const OWNER_ADMIN_EMAIL = "nakeymasi@gmail.com"; // the ONLY account that can ever be admin
 const STORE_NAME = "accountability";
@@ -25,7 +27,7 @@ const RATE_LIMIT = { windowMs: 10 * 60 * 1000, max: 30 }; // per IP+route on pub
 const TABLES = [
   "profiles", "credentials", "sessions", "user_roles", "invites",
   "accountability_requests", "matches", "calendar_events", "messages",
-  "content_items", "integration_connections", "audit_log", "data_requests", "rate_limits",
+  "content_items", "integration_connections", "audit_log", "data_requests", "rate_limits", "notifications", "password_resets",
 ];
 
 /* ---------------- Record store (one blob per record) ---------------- */
@@ -164,7 +166,7 @@ async function audit(db, actorId, action, targetType, targetId, details) {
 }
 async function publicUser(db, profile) {
   const roles = (await db.all("user_roles")).filter((r) => r.user_id === profile.id).map((r) => r.role);
-  return { id: profile.id, email: profile.email, display_name: profile.display_name, consent_accepted_at: profile.consent_accepted_at, marketing_email_opt_in: profile.marketing_email_opt_in, created_at: profile.created_at, updated_at: profile.updated_at, roles };
+  return { id: profile.id, email: profile.email, display_name: profile.display_name, consent_accepted_at: profile.consent_accepted_at, marketing_email_opt_in: profile.marketing_email_opt_in, reminder_email_opt_in: profile.reminder_email_opt_in === true, created_at: profile.created_at, updated_at: profile.updated_at, roles };
 }
 async function isOwnerAdmin(db, profile) {
   return !!profile && profile.email === OWNER_ADMIN_EMAIL &&
@@ -297,23 +299,62 @@ async function handle(db, method, rawPath, headers, body, ip) {
     return { status: 200, obj: { ok: true } };
   }
   if (p === "/api/auth/password-reset" && method === "POST") {
-    if (await rateLimited(db, ip, "password-reset")) failWith(429, "Too many reset requests just now. Please wait a bit and try again.");
+    if (await rateLimited(db, ip, "password-reset")) failWith(429, "Too many reset requests. Please wait and try again.");
     const email = clean(body.email, 160).toLowerCase();
-    const profile = (await db.all("profiles")).find((x) => x.email === email);
+    if (!validEmail(email)) failWith(400, "Enter a valid email address.");
+    if (!emailConfigured()) failWith(503, "Password-reset emails need the community owner's email connection. No email has been sent yet.");
+    const profile = (await db.all("profiles")).find(x => x.email === email);
     if (profile) {
-      const cred = (await db.all("credentials")).find((c) => c.user_id === profile.id);
+      const cred = (await db.all("credentials")).find(c => c.user_id === profile.id);
       if (cred) {
-        const code = String(crypto.randomInt(100000, 999999));
-        // SECURITY: only the HASH lives server-side. The plain code is never
-        // stored, logged, or returned — it is delivered by email once the
-        // email integration is connected; until then the owner helps in person.
-        cred.password_reset_code_hash = hashCode(code);
-        cred.password_reset_expires_at = new Date(Date.now() + RESET_TTL_MS).toISOString();
-        await db.update("credentials", cred);
+        const code = crypto.randomBytes(32).toString("hex");
+        const reset = await db.insertWithId("password_resets", { id: hashCode(code), user_id: profile.id, credential_id: cred.id, expires_at: new Date(Date.now() + RESET_TTL_MS).toISOString(), used_at: null });
+        const site = process.env.URL || "https://accountability-app-glam.netlify.app";
+        const link = `${site}/#reset=${code}`;
+        try { await sendAccountabilityEmail({ to: email, subject: "Reset your Accountability password", text: `You requested a password reset. Open this private link to choose a new password:\n${link}\n\nThis link expires in 30 minutes and can be used once. If you didn't request this, ignore this email.`, idempotencyKey: `password-reset/${reset.id}` }); }
+        catch (_) { await db.remove("password_resets", reset.id); failWith(503, "The email service could not send your reset link. Please try again later."); }
       }
     }
-    // Same answer whether or not the account exists; no mail provider is implemented.
-    return { status: 200, obj: { ok: true, message: "Password reset by email is not available yet. Please contact the community owner for help. No reset email has been sent.", resetToken: null } };
+    return { status: 200, obj: { ok: true, message: "If that email has an account, a reset link has been sent. Check your inbox and spam folder." } };
+  }
+  if (p === "/api/auth/password-reset/confirm" && method === "POST") {
+    if (await rateLimited(db, ip, "reset-confirm")) failWith(429, "Too many attempts. Please wait and try again.");
+    const code = String(body.resetToken || "");
+    const password = String(body.password || "");
+    if (!/^[a-f0-9]{64}$/.test(code)) failWith(400, "This reset link is invalid. Request a new one.");
+    if (password.length < 8 || password.length > 256) failWith(400, "Choose a password between 8 and 256 characters.");
+    const id = hashCode(code);
+    const reset = await db.getDirect("password_resets", id);
+    if (!reset || reset.used_at || new Date(reset.expires_at) <= new Date()) failWith(400, "This reset link expired or was used. Request a new one.");
+    const cred = await db.getDirect("credentials", reset.credential_id);
+    if (!cred) failWith(400, "This reset link is no longer valid.");
+    await db.compareUpdate("password_resets", id, current => {
+      if (current.used_at || new Date(current.expires_at) <= new Date()) failWith(400, "This reset link expired or was used. Request a new one.");
+      return { ...current, used_at: now() };
+    });
+    const hashed = hashPassword(password);
+    cred.password_salt = hashed.salt; cred.password_hash = hashed.hash;
+    cred.password_reset_code_hash = ""; cred.password_reset_expires_at = null;
+    await db.update("credentials", cred);
+    await db.removeWhere("sessions", session => session.user_id === reset.user_id);
+    await db.removeWhere("password_resets", row => row.user_id === reset.user_id && row.id !== id);
+    return { status: 200, obj: { ok: true, message: "Password updated. Sign in with your new password." } };
+  }
+  if (p === "/api/notifications" && method === "GET") {
+    const { profile } = await requireAuth(db, headers);
+    await createReminders(db, { userId: profile.id });
+    const requests = await db.all("accountability_requests");
+    const matches = await db.all("matches");
+    const notifications = (await db.all("notifications")).filter(n => {
+      const request = requests.find(r => r.id === n.request_id);
+      return n.user_id === profile.id && request && ["open", "matched"].includes(request.status) && new Date(n.starts_at) > new Date() && (request.requester_id === profile.id || matches.some(m => m.request_id === request.id && m.partner_id === profile.id && m.status === "active"));
+    }).sort((a,b) => a.starts_at.localeCompare(b.starts_at));
+    return { status: 200, obj: { notifications } };
+  }
+  if (p === "/api/notifications/read" && method === "POST") {
+    const { profile } = await requireAuth(db, headers);
+    for (const note of (await db.all("notifications")).filter(n => n.user_id === profile.id && !n.read_at)) { note.read_at = now(); await db.update("notifications", note); }
+    return { status: 200, obj: { ok: true } };
   }
 
   /* ----- Me ----- */
@@ -324,6 +365,7 @@ async function handle(db, method, rawPath, headers, body, ip) {
   if (p === "/api/me" && method === "PATCH") {
     const { profile } = await requireAuth(db, headers);
     if (typeof body.marketingOptIn === "boolean") { profile.marketing_email_opt_in = body.marketingOptIn; await db.update("profiles", profile); }
+    if (typeof body.reminderOptIn === "boolean") { profile.reminder_email_opt_in = body.reminderOptIn; await db.update("profiles", profile); }
     if (typeof body.display_name === "string" && body.display_name.trim()) { profile.display_name = clean(body.display_name, 80); await db.update("profiles", profile); }
     return { status: 200, obj: { user: await publicUser(db, profile) } };
   }
@@ -524,6 +566,8 @@ async function handle(db, method, rawPath, headers, body, ip) {
     await db.removeWhere("matches", (m) => m.requester_id === me.id || m.partner_id === me.id);
     await db.removeWhere("accountability_requests", (r) => r.requester_id === me.id);
     await db.removeWhere("sessions", (s) => s.user_id === me.id);
+    await db.removeWhere("notifications", n => n.user_id === me.id || owned.has(n.request_id));
+    await db.removeWhere("password_resets", r => r.user_id === me.id);
     await db.removeWhere("credentials", (c) => c.user_id === me.id);
     await db.removeWhere("user_roles", (r) => r.user_id === me.id);
     await db.removeWhere("profiles", (x) => x.id === me.id);
@@ -575,7 +619,7 @@ async function handle(db, method, rawPath, headers, body, ip) {
       const envMap = { zoom: "ZOOM_ACCOUNT_ID", google_calendar: "GOOGLE_CALENDAR_ID", email: "EMAIL_FROM" };
       const integrations = (await db.all("integration_connections")).map((i) => ({
         ...i,
-        status: process.env[envMap[i.provider]] ? "configured_not_connected" : "not_connected",
+        status: i.provider === "email" ? (emailConfigured() ? "configured" : "not_connected") : process.env[envMap[i.provider]] ? "configured_not_connected" : "not_connected",
         last_checked_at: now(),
       }));
       return { status: 200, obj: { integrations } };
@@ -632,3 +676,5 @@ export async function handler(event) {
   const { status, obj } = await run(event.httpMethod || "GET", event.path || "/", headers, body, ip);
   return { statusCode: status, headers: { "Content-Type": "application/json", "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" }, body: JSON.stringify(obj) };
 }
+
+export { Db };
