@@ -3,9 +3,10 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const crypto = require('node:crypto');
-let source = fs.readFileSync('netlify/functions/api.mjs','utf8').replace('import { getStore } from "@netlify/blobs";', '').replace('import crypto from "node:crypto";', '').replace('export default async function handlerV2','async function handlerV2').replace('export async function handler','async function handler');
+let source = fs.readFileSync('netlify/functions/api.mjs','utf8').replace(/^import .*;$/gm, '').replace('export { Db };', '').replace('export default async function handlerV2','async function handlerV2').replace('export async function handler','async function handler');
 source += '\nthis.subject = { handle, Db };';
-const context = { crypto, process, console, URL, Response };
+const reminderModule = import('../server/lib/reminders.mjs');
+const context = { crypto, process, console, URL, Response, emailConfigured: () => false, sendAccountabilityEmail: async () => { throw Error('not configured'); }, createReminders: async (...args) => (await reminderModule).createReminders(...args) };
 vm.runInNewContext(source, context);
 const { handle, Db } = context.subject;
 function fixture() {
@@ -46,7 +47,7 @@ test('deleting partner reopens surviving request; deletes replies on owned reque
  await f.call('DELETE','/api/account'); assert.equal((await f.db.get('accountability_requests','other')).status,'open');assert.equal(await f.db.get('messages','reply'),null);
 });
 test('password reset does not claim to send an email',async()=>{
- const f=fixture();const result=await f.call('POST','/api/auth/password-reset',{email:'unknown@example.com'});assert.match(result.obj.message,/No reset email has been sent/);
+ const f=fixture();await assert.rejects(()=>f.call('POST','/api/auth/password-reset',{email:'unknown@example.com'}),e=>e.status===503);
 });
 
 test('different members can support the same request simultaneously',async()=>{
@@ -74,4 +75,48 @@ test('one supporter leaving keeps other supporters active',async()=>{
  await f.call('PATCH','/api/matches/m1',{status:'released'});
  assert.equal((await f.db.get('accountability_requests','r')).status,'matched');
  assert.equal((await f.db.get('matches','m2')).status,'active');
+});
+
+test('reset emails contain a one-time token; password changes revoke sessions', async()=>{
+ const f=fixture();let sent;
+ context.emailConfigured=()=>true;context.sendAccountabilityEmail=async email=>{sent=email;return 'email-id'};
+ try {
+  await f.seed('credentials',{id:'cred',user_id:'owner',password_hash:'old',password_salt:'old'});
+  const result=await f.call('POST','/api/auth/password-reset',{email:'nakeymasi@gmail.com'});
+  assert.equal(result.status,200);assert.equal(result.obj.resetToken,undefined);
+  const token=sent.text.match(/#reset=([a-f0-9]{64})/)[1];
+  const stored=[...f.rows.values()].find(r=>r.credential_id==='cred');assert.notEqual(stored.id,token);
+  await f.call('POST','/api/auth/password-reset/confirm',{resetToken:token,password:'new-password-123'});
+  assert.equal((await f.db.all('sessions')).length,0);
+  const cred=await f.db.get('credentials','cred');assert.notEqual(cred.password_hash,'old');
+  await assert.rejects(()=>f.call('POST','/api/auth/password-reset/confirm',{resetToken:token,password:'another-password'}),e=>e.status===400);
+ } finally {context.emailConfigured=()=>false;}
+});
+test('expired reset links cannot change credentials',async()=>{
+ const f=fixture();const token='a'.repeat(64);const id=crypto.createHash('sha256').update(token).digest('hex');
+ await f.seed('password_resets',{id,credential_id:'cred',user_id:'owner',expires_at:'2000-01-01',used_at:null});
+ await assert.rejects(()=>f.call('POST','/api/auth/password-reset/confirm',{resetToken:token,password:'new-password'}),e=>e.status===400);
+});
+test('reminders deduplicate requesters across multiple supporters and repeated runs',async()=>{
+ const {createReminders}=await reminderModule;const f=fixture();const nowMs=Date.now();
+ await f.seed('accountability_requests',{id:'r',requester_id:'owner',title:'Test',scheduled_for:new Date(nowMs+30*60000).toISOString(),status:'matched'});
+ await f.seed('matches',{id:'m',request_id:'r',requester_id:'owner',partner_id:'partner',status:'active'});
+ await f.seed('matches',{id:'m2',request_id:'r',requester_id:'owner',partner_id:'partner',status:'active'});
+ await createReminders(f.db,{nowMs});await createReminders(new Db(f.store),{nowMs});
+ assert.equal((await new Db(f.store).all('notifications')).length,2);
+ await createReminders(new Db(f.store),{nowMs:nowMs+20*60000});
+ assert.equal((await new Db(f.store).all('notifications')).length,4);
+});
+test('reminder email is opt-in and never repeats after successful delivery',async()=>{
+ const {createReminders}=await reminderModule;const f=fixture();const nowMs=Date.now();let sends=0;
+ await f.seed('profiles',{id:'owner',email:'owner@example.com',reminder_email_opt_in:true});
+ await f.seed('accountability_requests',{id:'r',requester_id:'owner',title:'Test',scheduled_for:new Date(nowMs+30*60000).toISOString(),status:'open'});
+ const options={nowMs,deliverEmail:true,configured:()=>true,send:async()=>{sends++;return 'ok'}};
+ await createReminders(f.db,options);await createReminders(new Db(f.store),options);assert.equal(sends,1);
+});
+test('notifications belong only to the signed-in member',async()=>{
+ const f=fixture();const starts_at=new Date(Date.now()+120*60000).toISOString();
+ await f.seed('accountability_requests',{id:'r',requester_id:'owner',title:'Test',scheduled_for:starts_at,status:'open'});
+ await f.seed('notifications',{id:'other',user_id:'partner',request_id:'r',starts_at});
+ const result=await f.call('GET','/api/notifications');assert.equal(result.obj.notifications.length,0);
 });
