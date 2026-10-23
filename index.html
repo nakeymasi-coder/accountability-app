@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Accountability App — Glam's Private Community</title>
+<meta name="description" content="Invite-only accountability app: post a request, match with a partner, show up together.">
+<meta name="theme-color" content="#7db4ff">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div class="bg-orbs" aria-hidden="true"><span></span><span></span><span></span></div>
+
+<header class="app-header">
+  <div class="brand">
+    <img src="icon.svg" alt="" class="brand-icon" width="40" height="40">
+    <div>
+      <h1>Accountability</h1>
+      <p>Private community · Invite only</p>
+    </div>
+  </div>
+  <button id="btn-signout" class="pill-btn ghost hidden" type="button">Sign out</button>
+</header>
+
+<div id="demo-banner" class="demo-banner hidden" role="note">
+  <strong>Demo Mode</strong> — no live backend is connected, so anything you enter is saved only in this browser on this device and is not shared with the community. Connect the backend (see README) for real accounts and saving.
+</div>
+<div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
+<div id="global-error" class="error-banner hidden" role="alert"></div>
+
+<main id="app-main">
+
+  <!-- ===== AUTH ===== -->
+  <section id="screen-auth" class="screen">
+    <div class="card3d hero-card">
+      <h2>Show up, together.</h2>
+      <p>Post what you need accountability for, a member claims it, and it lands on the shared calendar. Simple, private, just for this community.</p>
+    </div>
+
+    <div class="card3d">
+      <div class="tab-row" role="tablist" aria-label="Sign in or sign up">
+        <button id="tab-signin" class="pill-btn tab active" type="button">Sign in</button>
+        <button id="tab-signup" class="pill-btn tab" type="button">Sign up</button>
+      </div>
+
+      <form id="signin-form" class="form" novalidate>
+        <label>Email <input id="signin-email" type="email" autocomplete="email" required placeholder="you@example.com"></label>
+        <label>Password <input id="signin-password" type="password" autocomplete="current-password" required placeholder="Your password"></label>
+        <p id="signin-error" class="field-error hidden"></p>
+        <button class="pill-btn primary big" type="submit">Sign in</button>
+        <button id="btn-forgot" class="link-btn" type="button">Forgot your password?</button>
+      </form>
+
+      <form id="signup-form" class="form hidden" novalidate>
+        <label>Your name <input id="signup-name" type="text" autocomplete="name" required placeholder="How should we call you?"></label>
+        <label>Email <input id="signup-email" type="email" autocomplete="email" required placeholder="you@example.com"></label>
+        <label>Password <input id="signup-password" type="password" autocomplete="new-password" required minlength="8" placeholder="At least 8 characters"></label>
+        <label>Invite code <input id="signup-invite" type="text" autocomplete="off" placeholder="From your invite (owner doesn't need one)"></label>
+        <!-- honeypot: humans never see or fill this -->
+        <label class="hp" aria-hidden="true">Website <input id="signup-website" type="text" tabindex="-1" autocomplete="off"></label>
+        <label class="check"><input id="signup-consent" type="checkbox" required>
+          <span>I agree to the <a href="#privacy" id="link-privacy">Privacy Policy</a> and I understand my name, email, accountability requests, messages, and calendar commitments are stored so the app can match me with a partner and show my commitments. I can export or delete my data any time from the Account tab.</span></label>
+        <label class="check"><input id="signup-marketing" type="checkbox">
+          <span>Yes, email me community news and updates. (Optional — I can unsubscribe any time from the Account tab.)</span></label>
+        <p id="signup-error" class="field-error hidden"></p>
+        <button class="pill-btn primary big" type="submit">Create my account</button>
+      </form>
+
+      <form id="reset-form" class="form hidden" novalidate>
+        <h3>Reset your password</h3>
+        <p class="muted">Enter your email and we'll start a reset. For your safety, reset codes are never shown inside the app — use the code sent to your own email, or ask the community owner for help until email sending is connected.</p>
+        <label>Email <input id="reset-email" type="email" autocomplete="email" required></label>
+        <p id="reset-message" class="field-ok hidden"></p>
+        <button class="pill-btn primary" type="submit">Request reset</button>
+        <button id="btn-back-signin" class="link-btn" type="button">Back to sign in</button>
+      </form>
+    </div>
+  </section>
+
+  <!-- ===== FEED ===== -->
+  <section id="screen-feed" class="screen hidden">
+    <div class="row-between"><h2>Community Feed</h2><button id="btn-new-request" class="pill-btn primary" type="button">+ New Request</button></div>
+    <div id="feed-list" class="stack"></div>
+    <p id="feed-empty" class="empty hidden">No open requests yet. Be the first to post what you're showing up for today.</p>
+  </section>
+
+  <!-- ===== NEW REQUEST ===== -->
+  <section id="screen-new-request" class="screen hidden">
+    <h2>New Accountability Request</h2>
+    <form id="request-form" class="card3d form" novalidate>
+      <label>Title <input id="req-title" type="text" required maxlength="120" placeholder="Going live at 5 — need a partner"></label>
+      <label>What do you need accountability for? <textarea id="req-what" required maxlength="1000" rows="3" placeholder="I want to go live at five but I keep putting it off…"></textarea></label>
+      <label>What should your partner do? <textarea id="req-duties" required maxlength="1000" rows="3" placeholder="Join 10 minutes early, check in at 4:45, stay for the first 15 minutes…"></textarea></label>
+      <label>Date &amp; time <input id="req-when" type="datetime-local" required></label>
+      <label>How long (minutes) <input id="req-duration" type="number" min="5" max="480" value="30" required></label>
+      <label>Where / link (optional) <input id="req-where" type="text" maxlength="300" placeholder="Zoom link, live platform, or place"></label>
+      <label class="hp" aria-hidden="true">Website <input id="req-website" type="text" tabindex="-1" autocomplete="off"></label>
+      <p id="request-error" class="field-error hidden"></p>
+      <div class="row"><button class="pill-btn primary big" type="submit">Post to the community</button>
+      <button id="btn-cancel-request" class="pill-btn ghost" type="button">Cancel</button></div>
+    </form>
+  </section>
+
+  <!-- ===== REQUEST DETAIL ===== -->
+  <section id="screen-request-detail" class="screen hidden">
+    <button id="btn-back-feed" class="pill-btn ghost" type="button">← Back to feed</button>
+    <div id="detail-card" class="card3d"></div>
+    <div class="card3d">
+      <h3>Replies</h3>
+      <div id="message-list" class="stack"></div>
+      <p id="messages-empty" class="empty hidden">No replies yet. Say you're available, or ask what they need.</p>
+      <form id="message-form" class="form" novalidate>
+        <label class="sr-only">Your reply <textarea id="message-body" required maxlength="1000" rows="2" placeholder="I'm available — what do you need me to do?"></textarea></label>
+        <p id="message-error" class="field-error hidden"></p>
+        <button class="pill-btn primary" type="submit">Reply</button>
+      </form>
+    </div>
+  </section>
+
+  <!-- ===== CALENDAR ===== -->
+  <section id="screen-calendar" class="screen hidden">
+    <h2>Accountability Calendar</h2>
+    <div id="calendar-list" class="stack"></div>
+    <p id="calendar-empty" class="empty hidden">Nothing scheduled yet. When a request gets claimed, it shows up here for the whole community.</p>
+  </section>
+
+  <!-- ===== MY COMMITMENTS ===== -->
+  <section id="screen-commitments" class="screen hidden">
+    <h2>My Commitments</h2>
+    <div id="commitments-list" class="stack"></div>
+    <p id="commitments-empty" class="empty hidden">You haven't claimed or posted a matched request yet.</p>
+  </section>
+
+  <!-- ===== ACCOUNT ===== -->
+  <section id="screen-account" class="screen hidden">
+    <h2>My Account</h2>
+    <div class="card3d">
+      <p><strong id="account-name"></strong><br><span id="account-email" class="muted"></span><br><span id="account-role" class="badge"></span></p>
+      <label class="check"><input id="account-marketing" type="checkbox"> <span>Email me community news and updates (uncheck to unsubscribe)</span></label>
+      <div class="stack">
+        <button id="btn-export" class="pill-btn" type="button">Export my data</button>
+        <pre id="export-output" class="export hidden"></pre>
+        <button id="btn-delete-data" class="pill-btn danger" type="button">Delete my account &amp; data</button>
+        <p class="muted small">Your account data is kept until you delete your account, or the owner removes it after 24 months inactive. Export or delete any time — deleting can't be undone.</p>
+        <p id="account-message" class="field-ok hidden"></p>
+      </div>
+    </div>
+    <div class="card3d" id="privacy">
+      <h3>Privacy Policy</h3>
+      <div id="privacy-body" class="prose"></div>
+    </div>
+  </section>
+
+  <!-- ===== ADMIN (owner only) ===== -->
+  <section id="screen-admin" class="screen hidden">
+    <h2>Admin Dashboard</h2>
+    <div id="admin-overview" class="card3d"></div>
+    <div class="card3d"><h3>Members</h3><div id="admin-members" class="stack"></div></div>
+    <div class="card3d"><h3>Invite codes</h3>
+      <form id="invite-form" class="form"><button class="pill-btn primary" type="submit">Create invite code</button></form>
+      <div id="admin-invites" class="stack"></div>
+    </div>
+    <div class="card3d"><h3>Content</h3><div id="admin-content" class="stack"></div></div>
+    <div class="card3d"><h3>Integrations</h3><div id="admin-integrations" class="stack"></div>
+      <p class="muted small">Status only. Keys and secrets live on the server in environment variables — never in this app or in the repo.</p></div>
+    <div class="card3d"><h3>Audit log</h3><div id="admin-audit" class="stack"></div></div>
+  </section>
+
+</main>
+
+<nav id="main-nav" class="bottom-nav hidden" aria-label="Main">
+  <button data-nav="feed" class="nav-btn active" type="button">Feed</button>
+  <button data-nav="calendar" class="nav-btn" type="button">Calendar</button>
+  <button data-nav="commitments" class="nav-btn" type="button">Mine</button>
+  <button data-nav="account" class="nav-btn" type="button">Account</button>
+  <button data-nav="admin" id="nav-admin" class="nav-btn hidden" type="button">Admin</button>
+</nav>
+
+<script src="app.js"></script>
+</body>
+</html>
